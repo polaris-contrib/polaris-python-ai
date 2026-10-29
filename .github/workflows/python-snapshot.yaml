@@ -80,6 +80,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: polaris-contrib/polaris-python
+          ref: ${{ github.head_ref || github.ref_name }}
           path: polaris-python
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v6

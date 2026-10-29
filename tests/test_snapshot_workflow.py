@@ -26,10 +26,15 @@ import yaml
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/python-snapshot.yaml"
+TESTING_WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/testing.yml"
 
 
 def workflow():
     return yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+
+
+def _load_testing_workflow():
+    return yaml.load(TESTING_WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
 
 def _project_text(version: str) -> str:
@@ -85,11 +90,24 @@ def test_snapshot_publish_only_uses_verified_artifacts():
 
 def test_snapshot_build_checks_publishable_metadata_and_core_checkout():
     steps = workflow()["jobs"]["build"]["steps"]
-    assert any(step.get("with", {}).get("repository") == "polaris-contrib/polaris-python"
-               for step in steps)
+    core_checkout = next(
+        step for step in steps
+        if step.get("with", {}).get("repository") == "polaris-contrib/polaris-python"
+    )
+    assert core_checkout["with"]["ref"] == "${{ github.head_ref || github.ref_name }}"
     assert any("polaris-python/dist/*.whl" in step.get("run", "") for step in steps)
     assert any("${wheel}[agentscope,a2a,mcp]" in step.get("run", "") for step in steps)
     assert any("../polaris-python" in step.get("run", "") for step in steps)
+
+
+@pytest.mark.parametrize("job", ["test", "package"])
+def test_testing_checks_out_matching_core_ref(job):
+    steps = _load_testing_workflow()["jobs"][job]["steps"]
+    core_checkout = next(
+        step for step in steps
+        if step.get("with", {}).get("repository") == "polaris-contrib/polaris-python"
+    )
+    assert core_checkout["with"]["ref"] == "${{ github.head_ref || github.ref_name }}"
 
 
 @pytest.mark.parametrize("configured, expected", [
