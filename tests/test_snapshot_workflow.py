@@ -19,6 +19,7 @@ import os
 import runpy
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,7 @@ import yaml
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/python-snapshot.yaml"
 TESTING_WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/testing.yml"
+PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 
 def workflow():
@@ -108,6 +110,30 @@ def test_testing_checks_out_matching_core_ref(job):
         if step.get("with", {}).get("repository") == "polaris-contrib/polaris-python"
     )
     assert core_checkout["with"]["ref"] == "${{ github.head_ref || github.ref_name }}"
+
+
+def test_testing_uses_locked_coverage_dependency_and_isolated_concurrency():
+    config = _load_testing_workflow()
+    assert "concurrency" not in config
+    jobs = config["jobs"]
+    assert jobs["test"]["concurrency"]["group"].endswith("${{ matrix.python }}")
+    assert jobs["package"]["concurrency"]["group"].endswith("-package")
+    assert jobs["test"]["concurrency"]["cancel-in-progress"] == "true"
+    assert jobs["package"]["concurrency"]["cancel-in-progress"] == "true"
+    setup = next(
+        step for step in jobs["test"]["steps"]
+        if step.get("uses") == "astral-sh/setup-uv@v6"
+    )
+    assert "activate-environment" not in setup["with"]
+    install = next(
+        step for step in jobs["test"]["steps"]
+        if step.get("name") == "Install dependencies"
+    )
+    assert install["run"] == "uv sync --all-extras --group dev --locked"
+    dev_dependencies = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))[
+        "dependency-groups"
+    ]["dev"]
+    assert "pytest-cov>=6,<8" in dev_dependencies
 
 
 @pytest.mark.parametrize("configured, expected", [
