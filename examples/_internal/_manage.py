@@ -1,6 +1,6 @@
-# Tencent is pleased to support the open source community by making polaris-python available.
+# Tencent is pleased to support the open source community by making polaris-python-ai available.
 #
-# Copyright (C) 2021 Tencent. All rights reserved.
+# Copyright (C) 2026 Tencent. All rights reserved.
 #
 # Licensed under the BSD 3-Clause License (the "License");
 # you may not use this file except in compliance with the License.
