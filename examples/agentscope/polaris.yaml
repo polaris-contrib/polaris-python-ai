@@ -1,0 +1,9 @@
+global:
+  serverConnector:
+    addresses:
+      - ${POLARIS_SERVER_ADDRESS:127.0.0.1:8091}
+    token: ${POLARIS_TOKEN:}
+  api:
+    timeout: 5s
+  statReporter:
+    enable: false
