@@ -13,7 +13,10 @@
 # CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
+import asyncio
 from unittest.mock import patch
+
+import pytest
 
 from polaris_ai.agentscope import PolarisAgentConfig, PolarisAgentRuntime
 from polaris_ai.agentscope.config import (
@@ -77,3 +80,41 @@ def test_runtime_builds_mcp_resolver_only_when_enabled():
     assert runtime.mcp_resolver.scheme == "https"
     assert runtime.mcp_resolver.timeout == 5
     runtime.close()
+
+
+def test_cancelled_async_close_still_closes_owned_context():
+    asyncio.run(_cancelled_async_close_still_closes_owned_context())
+
+
+async def _cancelled_async_close_still_closes_owned_context():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Registrar:
+        async def async_close(self):
+            started.set()
+            await release.wait()
+
+    class OwnedContext:
+        closed = False
+
+        async def async_close(self):
+            self.closed = True
+
+    runtime = object.__new__(PolarisAgentRuntime)
+    runtime.registrar = Registrar()
+    runtime.resolver = None
+    runtime.skill_loader = None
+    runtime.context = OwnedContext()
+    runtime._closed = False
+
+    closing = asyncio.create_task(runtime.async_close())
+    await started.wait()
+    closing.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+
+    assert runtime.context.closed
+    assert runtime._closed
+    await runtime.async_close()

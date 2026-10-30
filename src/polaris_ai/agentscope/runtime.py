@@ -127,6 +127,12 @@ class PolarisAgentRuntime:
         if self.skill_loader is not None:
             self.skill_loader.close()
 
+    async def _close_all_async(self):
+        try:
+            await self._close_adapters()
+        finally:
+            await self.context.async_close()
+
     def close(self):
         """Close adapters, then the shared context only if this runtime owns it."""
         if getattr(self, "_closed", True):
@@ -139,8 +145,7 @@ class PolarisAgentRuntime:
         if getattr(self, "_closed", True):
             return
         self._closed = True
-        await await_completion(self._close_adapters())
-        await self.context.async_close()
+        await await_completion(self._close_all_async())
 
     def __enter__(self):
         self._check_open()

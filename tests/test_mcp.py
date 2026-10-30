@@ -13,6 +13,7 @@
 # CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
+import asyncio
 import types
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import patch
@@ -22,6 +23,7 @@ import pytest
 pytest.importorskip("agentscope.mcp")
 
 from agentscope.mcp import HttpMCPConfig, MCPClient
+from agentscope.message import ToolResultState
 from polaris.pkg.model.contract import (
     ServiceContract,
     ServiceFeature,
@@ -36,7 +38,14 @@ from polaris_ai.agentscope.mcp import PolarisMCPClient
 from tests._support import FakeContext, FakeEngine
 
 
-def instance(host="127.0.0.1", port=8080, protocol="mcp-streamable-http"):
+def instance(
+    host="127.0.0.1",
+    port=8080,
+    protocol="mcp-streamable-http",
+    *,
+    version="server-v1",
+    protocol_versions="2025-06-18",
+):
     raw = service_pb2.Instance(
         id={"value": f"{host}:{port}"},
         host={"value": host},
@@ -44,10 +53,10 @@ def instance(host="127.0.0.1", port=8080, protocol="mcp-streamable-http"):
         healthy={"value": True},
         weight={"value": 100},
         protocol={"value": protocol},
-        version={"value": "server-v1"},
+        version={"value": version},
         metadata={
             "mcp-server-name": "search-mcp",
-            "mcp-protocol-version": "2025-06-18",
+            "mcp-protocol-version": protocol_versions,
             "mcp-endpoint-path": "/sse" if protocol == "mcp-sse" else "/mcp",
         },
     )
@@ -58,7 +67,8 @@ def instance(host="127.0.0.1", port=8080, protocol="mcp-streamable-http"):
 
 
 class FakeWatch:
-    closed = False
+    def __init__(self):
+        self.closed = False
 
     async def close(self):
         self.closed = True
@@ -69,6 +79,8 @@ class FakeConsumer:
         self.instances = list(instances)
         self.contract = contract
         self.watch_calls = []
+        self.watches = []
+        self.contract_calls = []
         self.reported = []
 
     async def async_get_healthy_instances(self, request):
@@ -76,11 +88,14 @@ class FakeConsumer:
         return types.SimpleNamespace(get_instances=lambda: instances)
 
     async def async_get_service_contract(self, request):
+        self.contract_calls.append(request)
         return self.contract
 
     async def async_watch_service(self, request, listener):
         self.watch_calls.append((request, listener))
-        return FakeWatch()
+        watch = FakeWatch()
+        self.watches.append(watch)
+        return watch
 
     async def async_unwatch_service(self, watch):
         await watch.close()
@@ -117,9 +132,21 @@ class MCPTests(IsolatedAsyncioTestCase):
             "default",
             "search-mcp",
             service_features=[
-                ServiceFeature(ServiceFeatureType.MCP_TOOL, "disabled", status=ServiceFeatureStatus.DISABLED),
-                ServiceFeature(ServiceFeatureType.MCP_TOOL, "enabled", status=ServiceFeatureStatus.ENABLED),
-                ServiceFeature(ServiceFeatureType.MCP_RESOURCE, "disabled", status=ServiceFeatureStatus.DISABLED),
+                ServiceFeature(
+                    ServiceFeatureType.MCP_TOOL,
+                    "disabled",
+                    status=ServiceFeatureStatus.DISABLED,
+                ),
+                ServiceFeature(
+                    ServiceFeatureType.MCP_TOOL,
+                    "enabled",
+                    status=ServiceFeatureStatus.ENABLED,
+                ),
+                ServiceFeature(
+                    ServiceFeatureType.MCP_RESOURCE,
+                    "disabled",
+                    status=ServiceFeatureStatus.DISABLED,
+                ),
             ],
         )
         consumer = FakeConsumer([instance()], contract)
@@ -155,6 +182,122 @@ class MCPTests(IsolatedAsyncioTestCase):
             self.assertTrue(pool.clients == ())
             self.assertTrue(consumer.watch_calls)
 
+    async def test_pool_applies_resolver_protocol_version_filter(self):
+        compatible = instance(port=8080, protocol_versions="2024-11-05,2025-06-18")
+        incompatible = instance(port=8081, protocol_versions="2024-11-05")
+        consumer = FakeConsumer([incompatible, compatible])
+        with patch("polaris_ai.agentscope.mcp.ConsumerAPI", return_value=consumer):
+            resolver = PolarisMCPResolver(
+                FakeContext(FakeEngine()),
+                client_factory=FakeClient,
+                protocol_version="2025-06-18",
+            )
+            pool = PolarisMCPClientPool(resolver, "search-mcp", filter_contract=False)
+            await pool.start()
+            self.assertEqual([8080], [client.kwargs["port"] for client in pool.clients])
+            await pool.close()
+
+    async def test_pool_refreshes_same_endpoint_for_contract_and_version_changes(self):
+        first = instance(version="server-v1")
+        consumer = FakeConsumer([first], ServiceContract("default", "search-mcp"))
+        with patch("polaris_ai.agentscope.mcp.ConsumerAPI", return_value=consumer):
+            resolver = PolarisMCPResolver(
+                FakeContext(FakeEngine()),
+                client_factory=FakeClient,
+                filter_contract=True,
+            )
+            pool = PolarisMCPClientPool(resolver, "search-mcp")
+            await pool.start()
+            original = pool.clients[0]
+            self.assertIsNone(original.kwargs["disable_tools"])
+
+            consumer.contract = ServiceContract(
+                "default",
+                "search-mcp",
+                revision="contract-v2",
+                service_features=[
+                    ServiceFeature(
+                        ServiceFeatureType.MCP_TOOL,
+                        "dangerous_tool",
+                        status=ServiceFeatureStatus.DISABLED,
+                    )
+                ],
+            )
+            await pool.refresh()
+            contract_filtered = pool.clients[0]
+            self.assertTrue(original.closed)
+            self.assertEqual(["dangerous_tool"], contract_filtered.kwargs["disable_tools"])
+
+            consumer.instances = [instance(version="server-v2")]
+            await pool.refresh()
+            versioned = pool.clients[0]
+            self.assertTrue(contract_filtered.closed)
+            self.assertEqual("server-v2", consumer.contract_calls[-1].version)
+            self.assertIsNot(versioned, contract_filtered)
+            await pool.close()
+
+    async def test_pool_start_rolls_back_connected_clients_when_later_client_fails(self):
+        first = instance(port=8080, protocol="mcp-sse")
+        second = instance(port=8081, protocol="mcp-sse")
+        consumer = FakeConsumer([first, second])
+        created = []
+
+        def factory(**kwargs):
+            if kwargs["port"] == 8081:
+                raise RuntimeError("connect failed")
+            client = FakeClient(**kwargs)
+            created.append(client)
+            return client
+
+        with patch("polaris_ai.agentscope.mcp.ConsumerAPI", return_value=consumer):
+            resolver = PolarisMCPResolver(
+                FakeContext(FakeEngine()),
+                client_factory=factory,
+            )
+            pool = PolarisMCPClientPool(resolver, "search-mcp", filter_contract=False)
+            with pytest.raises(RuntimeError, match="connect failed"):
+                await pool.start()
+        self.assertEqual((), pool.clients)
+        self.assertTrue(created[0].connected)
+        self.assertTrue(created[0].closed)
+        self.assertTrue(consumer.watches[0].closed)
+
+    async def test_pool_start_cancellation_closes_connected_clients_and_watch(self):
+        first = instance(port=8080, protocol="mcp-sse")
+        second = instance(port=8081, protocol="mcp-sse")
+        consumer = FakeConsumer([first, second])
+        started = asyncio.Event()
+        release = asyncio.Event()
+        created = []
+
+        class BlockingClient(FakeClient):
+            async def connect(self):
+                self.connected = True
+                if self.kwargs["port"] == 8081:
+                    started.set()
+                    await release.wait()
+
+        def factory(**kwargs):
+            client = BlockingClient(**kwargs)
+            created.append(client)
+            return client
+
+        with patch("polaris_ai.agentscope.mcp.ConsumerAPI", return_value=consumer):
+            resolver = PolarisMCPResolver(
+                FakeContext(FakeEngine()),
+                client_factory=factory,
+            )
+            pool = PolarisMCPClientPool(resolver, "search-mcp", filter_contract=False)
+            task = asyncio.create_task(pool.start())
+            await started.wait()
+            task.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertEqual((), pool.clients)
+        self.assertTrue(all(client.closed for client in created))
+        self.assertTrue(consumer.watches[0].closed)
+
     async def test_native_client_wraps_tool_call_metrics(self):
         reporter = FakeReporter()
         client = PolarisMCPClient(
@@ -182,3 +325,116 @@ class MCPTests(IsolatedAsyncioTestCase):
         self.assertEqual("search", reporter.calls[0]["method"])
         self.assertEqual("mcp", reporter.calls[0]["instance_type"])
         self.assertTrue(reporter.calls[0]["success"])
+
+    async def test_native_client_reports_streaming_tool_after_final_chunk(self):
+        reporter = FakeReporter()
+        client = PolarisMCPClient(
+            name="search_mcp",
+            is_stateful=False,
+            mcp_config=HttpMCPConfig(url="http://127.0.0.1:8080/mcp"),
+            reporter=reporter,
+            service="search-mcp",
+            host="127.0.0.1",
+            port=8080,
+        )
+
+        class Tool:
+            async def call(self, **kwargs):
+                async def stream():
+                    yield types.SimpleNamespace(
+                        state=ToolResultState.RUNNING,
+                        is_last=False,
+                    )
+                    yield types.SimpleNamespace(
+                        state=ToolResultState.ERROR,
+                        is_last=True,
+                    )
+
+                return stream()
+
+        tool = Tool()
+
+        async def get_tool(_self, name):
+            return tool
+
+        with patch.object(MCPClient, "get_tool", get_tool):
+            wrapped = await client.get_tool("search")
+            stream = await wrapped.call(query="hello")
+            self.assertEqual([], reporter.calls)
+            chunks = [chunk async for chunk in stream]
+        self.assertEqual(2, len(chunks))
+        self.assertEqual(1, len(reporter.calls))
+        self.assertFalse(reporter.calls[0]["success"])
+        self.assertEqual(-1, reporter.calls[0]["ret_code"])
+
+    async def test_native_client_reports_streaming_tool_success_after_iteration(self):
+        reporter = FakeReporter()
+        client = PolarisMCPClient(
+            name="search_mcp",
+            is_stateful=False,
+            mcp_config=HttpMCPConfig(url="http://127.0.0.1:8080/mcp"),
+            reporter=reporter,
+            service="search-mcp",
+            host="127.0.0.1",
+            port=8080,
+        )
+
+        class Tool:
+            async def call(self, **kwargs):
+                async def stream():
+                    yield types.SimpleNamespace(
+                        state=ToolResultState.RUNNING,
+                        is_last=True,
+                    )
+
+                return stream()
+
+        tool = Tool()
+
+        async def get_tool(_self, name):
+            return tool
+
+        with patch.object(MCPClient, "get_tool", get_tool):
+            wrapped = await client.get_tool("search")
+            stream = await wrapped.call(query="hello")
+            self.assertEqual([], reporter.calls)
+            [chunk async for chunk in stream]
+        self.assertEqual(1, len(reporter.calls))
+        self.assertTrue(reporter.calls[0]["success"])
+
+    async def test_native_client_reports_streaming_tool_exception(self):
+        reporter = FakeReporter()
+        client = PolarisMCPClient(
+            name="search_mcp",
+            is_stateful=False,
+            mcp_config=HttpMCPConfig(url="http://127.0.0.1:8080/mcp"),
+            reporter=reporter,
+            service="search-mcp",
+            host="127.0.0.1",
+            port=8080,
+        )
+
+        class Tool:
+            async def call(self, **kwargs):
+                async def stream():
+                    yield types.SimpleNamespace(
+                        state=ToolResultState.RUNNING,
+                        is_last=False,
+                    )
+                    raise TimeoutError("timed out")
+
+                return stream()
+
+        tool = Tool()
+
+        async def get_tool(_self, name):
+            return tool
+
+        with patch.object(MCPClient, "get_tool", get_tool):
+            wrapped = await client.get_tool("search")
+            stream = await wrapped.call(query="hello")
+            with self.assertRaisesRegex(TimeoutError, "timed out"):
+                [chunk async for chunk in stream]
+        self.assertEqual(1, len(reporter.calls))
+        self.assertFalse(reporter.calls[0]["success"])
+        self.assertTrue(reporter.calls[0]["timeout"])

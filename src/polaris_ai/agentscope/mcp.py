@@ -41,6 +41,7 @@ from polaris.pkg.model.contract import (
 )
 from polaris.pkg.model.service import GetHealthyInstancesRequest, GetInstancesRequest, InstanceType
 
+from polaris_ai._async import await_completion
 from polaris_ai.metrics import PolarisCallReporter
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ MCP_SERVER_NAME = "mcp-server-name"
 MCP_PROTOCOL_VERSION = "mcp-protocol-version"
 MCP_ENDPOINT_PATH = "mcp-endpoint-path"
 MCP_SCHEME = "mcp-scheme"
+MCPPoolKey = tuple[str, str, str, str, tuple[str, ...]]
 
 
 def _client_name(service: str) -> str:
@@ -104,29 +106,68 @@ class PolarisMCPClient(MCPClient):
             return tool
         original = tool.call
 
-        async def reported_call(_tool, **kwargs):
-            started_at = time.monotonic()
-            try:
-                result = await original(**kwargs)
-            except BaseException as error:
-                await reporter.report(
-                    service=self._polaris_service,
-                    host=self._polaris_host,
-                    port=self._polaris_port,
-                    method=name,
-                    instance_type=InstanceType.MCP,
-                    started_at=started_at,
-                    success=False,
-                    timeout=isinstance(error, (asyncio.TimeoutError, TimeoutError)),
-                )
-                raise
-            success = getattr(result, "state", None) != ToolResultState.ERROR
+        async def report(*, started_at, success, timeout=False, ret_code=None):
             await reporter.report(
                 service=self._polaris_service,
                 host=self._polaris_host,
                 port=self._polaris_port,
                 method=name,
                 instance_type=InstanceType.MCP,
+                started_at=started_at,
+                success=success,
+                ret_code=ret_code,
+                timeout=timeout,
+            )
+
+        async def reported_call(_tool, **kwargs):
+            started_at = time.monotonic()
+            try:
+                result = await original(**kwargs)
+            except BaseException as error:
+                await report(
+                    started_at=started_at,
+                    success=False,
+                    timeout=isinstance(error, (asyncio.TimeoutError, TimeoutError)),
+                )
+                raise
+
+            if isinstance(result, types.AsyncGeneratorType):
+                async def reported_stream():
+                    final_state = None
+                    completed = False
+                    try:
+                        async for chunk in result:
+                            if getattr(chunk, "is_last", False):
+                                final_state = getattr(chunk, "state", None)
+                                completed = True
+                            yield chunk
+                    except BaseException as error:
+                        await report(
+                            started_at=started_at,
+                            success=False,
+                            timeout=isinstance(error, (asyncio.TimeoutError, TimeoutError)),
+                        )
+                        raise
+                    else:
+                        success = completed and final_state not in (
+                            ToolResultState.ERROR,
+                            ToolResultState.INTERRUPTED,
+                            ToolResultState.DENIED,
+                        )
+                        await report(
+                            started_at=started_at,
+                            success=success,
+                            ret_code=None if success else -1,
+                        )
+
+                return reported_stream()
+
+            success = getattr(result, "state", None) not in (
+                ToolResultState.ERROR,
+                ToolResultState.INTERRUPTED,
+                ToolResultState.DENIED,
+            )
+            await report(
                 started_at=started_at,
                 success=success,
                 ret_code=None if success else -1,
@@ -167,7 +208,7 @@ class PolarisMCPResolver:
         self.filter_contract = filter_contract
         self.headers = dict(headers or {})
 
-    async def async_candidates(self, service: str, *, protocol_version: str = ""):
+    async def async_candidates(self, service: str, *, protocol_version: str | None = None):
         if not isinstance(service, str) or not service.strip():
             raise ValueError("MCP service is required")
         response = await self.consumer.async_get_healthy_instances(
@@ -178,7 +219,9 @@ class PolarisMCPResolver:
             )
         )
         result = []
-        requested = _versions(protocol_version)
+        requested = _versions(
+            self.protocol_version if protocol_version is None else protocol_version
+        )
         for instance in [] if response is None else response.get_instances():
             if not instance.is_healthy() or instance.is_isolated():
                 continue
@@ -201,7 +244,11 @@ class PolarisMCPResolver:
                 )
             )
         except Exception as error:
-            logger.warning("MCP contract unavailable for %s; skipping Tool filtering: %s", service, error)
+            logger.warning(
+                "MCP contract unavailable for %s; skipping Tool filtering: %s",
+                service,
+                error,
+            )
             return []
         if contract is None:
             return []
@@ -250,16 +297,20 @@ class PolarisMCPResolver:
         headers: dict[str, str] | None = None,
         timeout: float | None = 30.0,
         filter_contract: bool = True,
+        disabled_tools: list[str] | None = None,
     ):
         url, port, protocol = mcp_endpoint(instance, scheme)
-        disabled = (
-            await self.async_disabled_tools(
-                service,
-                protocol=protocol,
-                version=instance.get_version(),
-            )
-            if filter_contract else []
-        )
+        if disabled_tools is None:
+            if filter_contract:
+                disabled = await self.async_disabled_tools(
+                    service,
+                    protocol=protocol,
+                    version=instance.get_version(),
+                )
+            else:
+                disabled = []
+        else:
+            disabled = list(disabled_tools)
         reporter = PolarisCallReporter(
             self.consumer,
             self.namespace,
@@ -276,8 +327,15 @@ class PolarisMCPResolver:
             host=instance.get_host(),
             port=port,
         )
-        if client.is_stateful:
-            await client.connect()
+        try:
+            if client.is_stateful:
+                await client.connect()
+        except BaseException:
+            try:
+                await await_completion(client.close())
+            except BaseException:
+                pass
+            raise
         return client
 
 
@@ -287,14 +345,19 @@ class PolarisMCPClientPool:
     def __init__(self, resolver: PolarisMCPResolver, service: str, **client_options):
         self.resolver = resolver
         self.service = service
-        self.client_options = {
+        options = {
             "scheme": resolver.scheme,
             "headers": resolver.headers,
             "timeout": resolver.timeout,
             "filter_contract": resolver.filter_contract,
             **client_options,
         }
-        self._clients: dict[tuple[str, str], MCPClient] = {}
+        configured_protocol = options.pop("protocol_version", resolver.protocol_version)
+        self.protocol_version = (
+            resolver.protocol_version if configured_protocol is None else configured_protocol
+        )
+        self.client_options = options
+        self._clients: dict[MCPPoolKey, MCPClient] = {}
         self._watch = None
         self._refresh_event = asyncio.Event()
         self._task = None
@@ -325,12 +388,23 @@ class PolarisMCPClientPool:
         )
         try:
             await self.refresh()
+            self._task = asyncio.create_task(self._run(), name=f"polaris-mcp-pool-{self.service}")
         except BaseException:
-            await self.resolver.consumer.async_unwatch_service(self._watch)
-            self._watch = None
+            try:
+                await await_completion(self._cleanup_start_failure())
+            except asyncio.CancelledError:
+                pass
             raise
-        self._task = asyncio.create_task(self._run(), name=f"polaris-mcp-pool-{self.service}")
         return self
+
+    async def _cleanup_start_failure(self):
+        clients, self._clients = tuple(self._clients.values()), {}
+        watch, self._watch = self._watch, None
+        try:
+            await self._close_clients(clients)
+        finally:
+            if watch is not None:
+                await self.resolver.consumer.async_unwatch_service(watch)
 
     async def _run(self):
         while not self._closed:
@@ -348,8 +422,11 @@ class PolarisMCPClientPool:
         async with self._lock:
             if self._closed:
                 return
-            instances = await self.resolver.async_candidates(self.service)
-            desired = {}
+            instances = await self.resolver.async_candidates(
+                self.service,
+                protocol_version=self.protocol_version,
+            )
+            desired: dict[MCPPoolKey, tuple[object, str, list[str]]] = {}
             for instance in instances:
                 try:
                     url, _port, protocol = mcp_endpoint(
@@ -358,15 +435,58 @@ class PolarisMCPClientPool:
                 except ValueError as error:
                     logger.warning("Skipping invalid MCP instance %s: %s", instance.get_id(), error)
                     continue
-                desired[(url, protocol)] = (instance, url)
-            for key in tuple(self._clients):
-                if key not in desired:
-                    await self._clients.pop(key).close()
-            for key, (instance, _url) in desired.items():
-                if key not in self._clients:
-                    self._clients[key] = await self.resolver.async_client_for_instance(
-                        self.service, instance, **self.client_options,
+                disabled = (
+                    await self.resolver.async_disabled_tools(
+                        self.service,
+                        protocol=protocol,
+                        version=instance.get_version(),
                     )
+                    if self.client_options["filter_contract"] else []
+                )
+                key: MCPPoolKey = (
+                    url,
+                    protocol,
+                    instance.get_version(),
+                    instance.get_metadata().get(MCP_PROTOCOL_VERSION, ""),
+                    tuple(sorted(set(disabled))),
+                )
+                desired[key] = (instance, url, disabled)
+
+            next_clients: dict[MCPPoolKey, MCPClient] = {}
+            created = []
+            try:
+                for key, (instance, _url, disabled) in desired.items():
+                    client = self._clients.get(key)
+                    if client is None:
+                        client = await self.resolver.async_client_for_instance(
+                            self.service,
+                            instance,
+                            disabled_tools=disabled,
+                            **self.client_options,
+                        )
+                        created.append(client)
+                    next_clients[key] = client
+            except BaseException:
+                try:
+                    await self._close_clients(created)
+                except asyncio.CancelledError:
+                    pass
+                raise
+
+            previous, self._clients = self._clients, next_clients
+            await self._close_clients(
+                tuple(client for key, client in previous.items() if key not in next_clients)
+            )
+
+    async def _close_clients(self, clients):
+        async def close_all():
+            for client in clients:
+                try:
+                    await client.close()
+                except Exception as error:
+                    logger.warning("Failed to close MCP client for %s: %s", self.service, error)
+
+        await await_completion(close_all())
 
     def choose_client(self):
         """Return the next connected client using round-robin selection."""
@@ -390,12 +510,8 @@ class PolarisMCPClientPool:
         if self._watch is not None:
             await self.resolver.consumer.async_unwatch_service(self._watch)
             self._watch = None
-        clients, self._clients = self._clients, {}
-        for client in clients.values():
-            try:
-                await client.close()
-            except Exception as error:
-                logger.warning("Failed to close MCP client for %s: %s", self.service, error)
+        clients, self._clients = tuple(self._clients.values()), {}
+        await self._close_clients(clients)
 
     async def __aenter__(self):
         return await self.start()
