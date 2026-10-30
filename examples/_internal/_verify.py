@@ -375,7 +375,9 @@ async def verify_mcp(address, namespace, stub):
     assert result["instances"]
     assert result["url"].endswith("/mcp")
     assert result["protocol"] == "mcp-streamable-http"
-    assert result["disabled_tools"] == ["disabled_tool"]
+    assert isinstance(result["disabled_tools"], list)
+    if stub is not None:
+        assert result["disabled_tools"] == ["disabled_tool"]
     if stub is not None:
         assert stub.count("get_contract") >= 1
     return {

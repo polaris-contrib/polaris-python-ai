@@ -14,8 +14,10 @@ Real registry:
 
 The offline check uses real SDK discovery and contract APIs, replacing only the
 Polaris gRPC boundary. It verifies the MCP URL, transport, healthy instance and
-disabled Tool filtering. `--connect` is not used by the default verifier because
-it requires a real MCP HTTP server.
+disabled Tool filtering with a fixed contract. Real verification checks the
+resolved URL, transport, healthy instance and the disabled Tool list returned by
+the registry; it does not assume a fixture-specific Tool name. `--connect` is not
+used by the default verifier because it requires a real MCP HTTP server.
 
 Logs are retained under `.logs/<run>/console.log`, `result.json`, and
 `verification.log`. Real verification requires `POLARIS_SERVER_ADDRESS` and an
