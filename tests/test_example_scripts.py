@@ -97,10 +97,10 @@ def test_runner_retains_exit_code_and_output(example_tree, exit_code):
     entry.write_text(f"print('verified', flush=True)\nraise SystemExit({exit_code})\n")
     assert manager.run_process(directory, entry, [], "verify", 3) == exit_code
     (run,) = (directory / ".logs").iterdir()
-    result = json.loads((run / "result.json").read_text())
+    result = json.loads((run / "result.json").read_text(encoding="utf-8"))
     assert result["exit_code"] == exit_code
     assert not result["timed_out"] and result["interrupted"] is None
-    assert (run / "console.log").read_text() == "verified\n"
+    assert (run / "console.log").read_text(encoding="utf-8") == "verified\n"
 
 
 def test_quiet_child_timeout_records_failure_and_stops_process(example_tree):
@@ -109,9 +109,9 @@ def test_quiet_child_timeout_records_failure_and_stops_process(example_tree):
     entry.write_text("import os, time\nprint(os.getpid(), flush=True)\ntime.sleep(30)\n")
     assert manager.run_process(directory, entry, [], "verify", 0.2) == 124
     (run,) = (directory / ".logs").iterdir()
-    result = json.loads((run / "result.json").read_text())
+    result = json.loads((run / "result.json").read_text(encoding="utf-8"))
     assert result["timed_out"] and result["exit_code"] != 0
-    assert not psutil.pid_exists(int((run / "console.log").read_text()))
+    assert not psutil.pid_exists(int((run / "console.log").read_text(encoding="utf-8")))
 
 
 def test_failure_does_not_prevent_remaining_scenarios(example_tree, monkeypatch):
@@ -133,14 +133,14 @@ def test_cleanup_preview_and_removal_preserve_source_and_other_scenario(example_
     other = example_tree / "agentscope/skill/mounted"
     for directory in (selected, other):
         (directory / ".logs").mkdir()
-        (directory / ".logs/console.log").write_text("retained")
-        (directory / "polaris.yaml").write_text("keep YAML")
+        (directory / ".logs/console.log").write_text("retained", encoding="utf-8")
+        (directory / "polaris.yaml").write_text("keep YAML", encoding="utf-8")
     manager.cleanup(selected, SimpleNamespace(force=True, dry_run=True))
     assert (selected / ".logs/console.log").exists()
     manager.cleanup(selected, SimpleNamespace(force=True, dry_run=False))
     assert not (selected / ".logs").exists()
-    assert (selected / "polaris.yaml").read_text() == "keep YAML"
-    assert (other / ".logs/console.log").read_text() == "retained"
+    assert (selected / "polaris.yaml").read_text(encoding="utf-8") == "keep YAML"
+    assert (other / ".logs/console.log").read_text(encoding="utf-8") == "retained"
 
 
 def test_cleanup_cannot_signal_reused_pid(example_tree):
@@ -248,7 +248,7 @@ def test_every_scenario_has_run_and_verification_documentation(name):
     directory = REPO / "examples" / name
     assert (directory / "README.md").is_file()
     assert (directory / "README-zh.md").is_file()
-    text = (directory / "test.md").read_text()
+    text = (directory / "test.md").read_text(encoding="utf-8")
     for expected in ("verify_e2e.sh", "console.log", "result.json", "verification.log"):
         assert expected in text
     assert (directory / "Makefile").is_file()

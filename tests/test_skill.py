@@ -172,7 +172,9 @@ class SkillTests(IsolatedAsyncioTestCase):
         loader = self.loader(names=["weather"], version="v1")
         for path in ("../escape", "/escape", "C:/escape", "a\\escape"):
             with self.subTest(path=path):
-                self.download(data=skill_zip(extra=(path, "unsafe")))
+                entry = zipfile.ZipInfo("entry")
+                entry.filename = path
+                self.download(data=skill_zip(extra=(entry, "unsafe")))
                 with self.assertRaisesRegex(ValueError, "Unsafe"):
                     await loader.async_get_skill("weather")
         self.download()
