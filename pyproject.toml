@@ -1,0 +1,42 @@
+[project]
+name = "polaris-python-ai"
+version = "0.1.0"
+description = "Polaris integrations for Python AI frameworks."
+readme = "README.md"
+license = "BSD-3-Clause"
+requires-python = ">=3.12"
+dependencies = ["polaris-python>=0.2.0,<0.3"]
+
+[project.optional-dependencies]
+agentscope = ["agentscope>=2.0.10,<3"]
+a2a = ["a2a-sdk>=1.2.3,<2"]
+mcp = ["agentscope>=2.0.10,<3", "mcp>=2,<3"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-cov>=6,<8",
+    "build>=1,<2",
+    "uvicorn>=0.30,<1",
+    "a2a-sdk[fastapi]>=1.2.3,<2",
+]
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv.sources]
+polaris-python = { path = "../polaris-python", editable = true }
+
+[tool.setuptools]
+packages = { find = { where = ["src"] } }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

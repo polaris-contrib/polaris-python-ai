@@ -1,0 +1,142 @@
+name: Testing
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+      - develop
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches:
+      - main
+      - release/*
+      - develop
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test ${{ matrix.os }} / Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-26 ]
+        python: [ '3.12', '3.13' ]
+    runs-on: ${{ matrix.os }}
+    concurrency:
+      group: testing-${{ github.workflow }}-${{ github.ref }}-${{ matrix.os }}-${{ matrix.python }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout polaris-python-ai
+        uses: actions/checkout@v4
+        with:
+          path: polaris-python-ai
+      - name: Checkout polaris-python
+        uses: actions/checkout@v4
+        with:
+          repository: polaris-contrib/polaris-python
+          ref: ${{ github.head_ref || github.ref_name }}
+          path: polaris-python
+      - name: Set up uv and Python ${{ matrix.python }}
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        working-directory: polaris-python-ai
+        run: uv sync --all-extras --group dev --locked
+      - name: Test with pytest
+        working-directory: polaris-python-ai
+        env:
+          GRPC_VERBOSITY: ERROR
+        run: uv run python -m pytest --cov=polaris_ai --cov-report=xml
+      - name: Upload coverage reports to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          directory: polaris-python-ai
+
+  package:
+    name: Build and verify wheel
+    runs-on: ubuntu-latest
+    concurrency:
+      group: testing-${{ github.workflow }}-${{ github.ref }}-package
+      cancel-in-progress: true
+    steps:
+      - name: Checkout polaris-python-ai
+        uses: actions/checkout@v4
+        with:
+          path: polaris-python-ai
+      - name: Checkout polaris-python
+        uses: actions/checkout@v4
+        with:
+          repository: polaris-contrib/polaris-python
+          ref: ${{ github.head_ref || github.ref_name }}
+          path: polaris-python
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Verify lockfile
+        working-directory: polaris-python-ai
+        run: uv lock --check
+      - name: Build core SDK dependency
+        working-directory: polaris-python
+        run: uv build
+      - name: Build AI distributions
+        working-directory: polaris-python-ai
+        run: uv build
+      - name: Create clean wheel environment
+        run: uv venv "$RUNNER_TEMP/polaris-ai-wheel-venv" --python 3.12
+      - name: Install wheel with dependencies
+        run: |
+          uv pip install --python "$RUNNER_TEMP/polaris-ai-wheel-venv/bin/python" \
+            polaris-python/dist/*.whl
+          wheel="$(ls polaris-python-ai/dist/*.whl)"
+          uv pip install --python "$RUNNER_TEMP/polaris-ai-wheel-venv/bin/python" \
+            "${wheel}[agentscope,a2a,mcp]" \
+            "pytest>=8.3,<9"
+      - name: Verify installed distribution
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/polaris-ai-wheel-venv/bin/python" - <<'PY'
+          import sys
+          from importlib.metadata import requires, version
+          from pathlib import Path
+
+          import polaris
+          import polaris_ai
+          from polaris_ai import __version__
+          from polaris_ai.a2a import A2ATransport, PolarisA2ARegistrar, PolarisA2AResolver
+          from polaris_ai.agentscope import PolarisAgentConfig
+
+          assert version("polaris-python-ai") == __version__
+          assert version("polaris-python") == polaris.__version__
+          assert Path(polaris_ai.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+          assert any(
+              item.startswith("polaris-python") and "../polaris-python" not in item
+              for item in requires("polaris-python-ai") or ()
+          )
+          assert A2ATransport and PolarisA2ARegistrar and PolarisA2AResolver
+          assert PolarisAgentConfig.from_env({}).namespace == "default"
+          print(f"verified polaris-python-ai {__version__} from {polaris_ai.__file__}")
+          PY
+      - name: Run tests against installed wheel
+        working-directory: polaris-python-ai
+        env:
+          POLARIS_PYTHON: ${{ runner.temp }}/polaris-ai-wheel-venv/bin/python
+        run: |
+          "$RUNNER_TEMP/polaris-ai-wheel-venv/bin/python" -m pytest tests -q
+      - name: Upload wheel and sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: polaris-python-ai-dist
+          path: polaris-python-ai/dist/
+          retention-days: 14
