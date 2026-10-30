@@ -136,6 +136,16 @@ def test_testing_uses_locked_coverage_dependency_and_isolated_concurrency():
     assert "pytest-cov>=6,<8" in dev_dependencies
 
 
+def test_testing_runs_all_supported_operating_systems():
+    job = _load_testing_workflow()["jobs"]["test"]
+    assert job["strategy"]["fail-fast"] == "false"
+    assert job["strategy"]["matrix"] == {
+        "os": ["ubuntu-latest", "windows-latest", "macos-26"],
+        "python": ["3.12", "3.13"],
+    }
+    assert job["runs-on"] == "${{ matrix.os }}"
+
+
 @pytest.mark.parametrize("configured, expected", [
     ("0.1.0", False),
     ("0.1.1a1", False),

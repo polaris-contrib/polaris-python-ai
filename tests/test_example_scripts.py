@@ -18,6 +18,7 @@
 import io
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,10 +54,14 @@ def test_entry_points_work_outside_project(script, tmp_path):
     import subprocess
 
     path = REPO / "examples" / script
-    assert os.access(path, os.X_OK)
+    if os.name != "nt":
+        assert os.access(path, os.X_OK)
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is unavailable")
     env = dict(os.environ, POLARIS_PYTHON=sys.executable)
     result = subprocess.run(
-        [str(path), "--help"],
+        [bash, path.as_posix(), "--help"],
         cwd=tmp_path,
         env=env,
         capture_output=True,
