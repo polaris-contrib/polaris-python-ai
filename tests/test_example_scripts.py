@@ -103,6 +103,21 @@ def test_runner_retains_exit_code_and_output(example_tree, exit_code):
     assert (run / "console.log").read_text(encoding="utf-8") == "verified\n"
 
 
+def test_e2e_namespace_defaults_to_dedicated_namespace(monkeypatch):
+    monkeypatch.delenv("POLARIS_E2E_NAMESPACE", raising=False)
+    assert runtime.e2e_namespace() == "python-agentscope-e2e"
+    assert manager.e2e_namespace() == "python-agentscope-e2e"
+
+    monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "custom-e2e")
+    assert runtime.e2e_namespace() == "custom-e2e"
+    monkeypatch.setenv("POLARIS_E2E_NAMESPACE", " ")
+    assert runtime.e2e_namespace() == "python-agentscope-e2e"
+    monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "default")
+    with pytest.raises(ValueError, match="isolated E2E namespace"):
+        runtime.e2e_namespace()
+    assert runtime.e2e_namespace(allow_default=True) == "default"
+
+
 def test_quiet_child_timeout_records_failure_and_stops_process(example_tree):
     directory = example_tree / "agentscope/skill/published"
     entry = directory / "verify.py"
@@ -229,16 +244,16 @@ def test_remote_cleanup_filters_ai_prefix_and_namespace(monkeypatch):
                 {
                     "code": 200000,
                     "services": [
-                        {"namespace": "python-integration", "name": "polaris-python-ai-e2e-agent"},
-                        {"namespace": "python-integration", "name": "polaris-python-e2e-agent"},
-                        {"namespace": "python-integration", "name": "mounted-agent"},
+                        {"namespace": "python-agentscope-e2e", "name": "polaris-python-ai-e2e-agent"},
+                        {"namespace": "python-agentscope-e2e", "name": "polaris-python-e2e-agent"},
+                        {"namespace": "python-agentscope-e2e", "name": "mounted-agent"},
                         {"namespace": "other", "name": "polaris-python-ai-e2e-agent"},
                     ],
                 }
             ).encode()
 
     monkeypatch.setenv("POLARIS_SERVER_ADDRESS", "registry:8091")
-    monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "python-integration")
+    monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "python-agentscope-e2e")
     monkeypatch.setattr(manager.urllib.request, "urlopen", lambda *args, **kwargs: Response())
     assert manager.test_services()[2] == ["polaris-python-ai-e2e-agent"]
 

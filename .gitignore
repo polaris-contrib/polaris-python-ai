@@ -16,4 +16,4 @@ dist/
 .build/
 examples/**/bin
 examples/**/x86-bin
-/.agents/
+/.agents

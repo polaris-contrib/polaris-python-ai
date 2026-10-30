@@ -33,7 +33,11 @@ sys.path[:0] = [
     str(Path(__file__).resolve().parents[2] / "src"),
     str(Path(__file__).resolve().parents[2]),
 ]
-from examples._internal._runtime import new_run_directory, track_process  # noqa: E402
+from examples._internal._runtime import (  # noqa: E402
+    e2e_namespace,
+    new_run_directory,
+    track_process,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO / "examples"
@@ -275,14 +279,11 @@ def console_address():
     return f"http://{host}:8090"
 
 
-def e2e_namespace():
-    return os.getenv("POLARIS_E2E_NAMESPACE", "python-integration")
-
-
 def test_services():
     """List only services created by this repository's real-service tests."""
     address = console_address()
-    namespace = e2e_namespace()
+    # Explicit cleanup must remain able to remove legacy services from "default".
+    namespace = e2e_namespace(allow_default=True)
     token = os.getenv("POLARIS_E2E_SERVICE_TOKEN") or os.getenv("POLARIS_SERVICE_TOKEN", "")
     url = f"{address}/naming/v1/services?namespace={urllib.parse.quote(namespace)}"
     request = urllib.request.Request(url, headers={"X-Polaris-Token": token} if token else {})

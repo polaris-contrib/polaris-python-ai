@@ -23,15 +23,16 @@ For a real registry:
 ```bash
 export POLARIS_SERVER_ADDRESS=<host>:8091
 export POLARIS_SERVICE_TOKEN=<service-token>
+export POLARIS_E2E_NAMESPACE=python-agentscope-e2e
 export POLARIS_SKILL_NAME=<published-skill>
 export POLARIS_AGENT_SERVICE=<service-with-mounted-skills>
 ./examples/verify_e2e.sh
 ```
 
-The namespace defaults to `python-integration`. Skill fixtures must already
-exist; these scripts do not publish Skills. A2A test instances are deregistered
-before exit. Each scenario retains console output, assertions, results, SDK
-logs and backups beneath its own `.logs/` directory.
+The namespace defaults to `python-agentscope-e2e`; `default` is rejected. Skill
+fixtures must already exist; these scripts do not publish Skills. A2A test
+instances are deregistered before exit. Each scenario retains console output,
+assertions, results, SDK logs and backups beneath its own `.logs/` directory.
 
 ```bash
 ./examples/logs.sh --latest --tail 50

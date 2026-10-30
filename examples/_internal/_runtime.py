@@ -28,7 +28,18 @@ from pathlib import Path
 
 import psutil
 
+DEFAULT_E2E_NAMESPACE = "python-agentscope-e2e"
+
 _tracked = set()
+
+
+def e2e_namespace(*, allow_default=False):
+    """Return the namespace reserved for real AgentScope example verification."""
+    namespace = os.getenv("POLARIS_E2E_NAMESPACE", DEFAULT_E2E_NAMESPACE).strip()
+    namespace = namespace or DEFAULT_E2E_NAMESPACE
+    if namespace == "default" and not allow_default:
+        raise ValueError("POLARIS_E2E_NAMESPACE must name an isolated E2E namespace")
+    return namespace
 
 
 def get_local_host(server_address):

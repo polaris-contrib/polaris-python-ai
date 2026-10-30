@@ -22,12 +22,14 @@ gRPC 边界。A2A 启动本机动态端口的 JSON-RPC/SSE Echo 服务，无需�
 ```bash
 export POLARIS_SERVER_ADDRESS=<host>:8091
 export POLARIS_SERVICE_TOKEN=<service-token>
+export POLARIS_E2E_NAMESPACE=python-agentscope-e2e
 export POLARIS_SKILL_NAME=<published-skill>
 export POLARIS_AGENT_SERVICE=<service-with-mounted-skills>
 ./examples/verify_e2e.sh
 ```
 
-命名空间默认 `python-integration`，由 `POLARIS_E2E_NAMESPACE` 覆盖。
+命名空间默认 `python-agentscope-e2e`，由 `POLARIS_E2E_NAMESPACE` 覆盖；
+`default` 会被拒绝。
 Skill 需事先发布或挂载；脚本只读。A2A 测试退出前反注册实例。
 每个场景保留独立的日志、断言、结果、SDK 日志与备份目录。
 

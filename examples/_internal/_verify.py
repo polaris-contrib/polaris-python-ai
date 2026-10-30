@@ -38,7 +38,7 @@ from polaris.api.consumer import ConsumerAPI
 from polaris.pkg.model.error import SDKError
 from polaris.pkg.model.service import GetAllInstancesRequest
 
-from examples._internal._runtime import get_local_host, verification_directory
+from examples._internal._runtime import e2e_namespace, get_local_host, verification_directory
 from examples._internal._stub import RegistryStub, offline_registry
 from examples.agentscope import _common
 from examples.agentscope.a2a.consumer import main as consumer_demo
@@ -388,7 +388,7 @@ async def verify_mcp(address, namespace, stub):
 
 
 async def verify(demo, real):
-    namespace = os.getenv("POLARIS_E2E_NAMESPACE", "python-integration")
+    namespace = e2e_namespace()
     stub = None if real else RegistryStub(namespace)
     address, token = required_environment(demo) if real else ("offline:8091", "offline-token")
     contexts = []

@@ -32,6 +32,7 @@ export POLARIS_SERVER_ADDRESS=<host>:8091
 export POLARIS_SERVICE_TOKEN=<service-token>
 export POLARIS_SKILL_NAME=<published-skill>
 export POLARIS_AGENT_SERVICE=<service-with-mounted-skills>
+export POLARIS_E2E_NAMESPACE=python-agentscope-e2e
 ./examples/verify_e2e.sh --only agentscope/a2a/consumer
 ```
 
@@ -44,7 +45,7 @@ A2A 需服务 token；已发布 Skill 需预先发布的 POLARIS_SKILL_NAME；
 
 可选环境变量：
 
-- POLARIS_E2E_NAMESPACE：请求命名空间，默认 python-integration。
+- POLARIS_E2E_NAMESPACE：请求命名空间，默认 python-agentscope-e2e；default 会被拒绝。
 - POLARIS_E2E_SERVICE_TOKEN：优先于 POLARIS_SERVICE_TOKEN。
 - POLARIS_TOKEN：SDK connector 接入 token，由 SDK 读取，与服务 token 分开。
 - POLARIS_SKILL_SERVER_ADDRESS：覆盖 Skill 地址；未设置由 SDK 推导端口 8094。
@@ -78,7 +79,7 @@ verification.log、console.log 和 SDK 分类日志。所有 Context 都验证�
 
 离线实例只存在于替身内，不访问外部 Polaris。真实 A2A 服务名以
 polaris-python-ai-e2e- 开头，每次含时间和随机标识，默认命名空间为
-python-integration；注册 host 为连接 Polaris 的本机源 IP，端口动态分配，
+python-agentscope-e2e；注册 host 为连接 Polaris 的本机源 IP，端口动态分配，
 不同验证不会争用固定端口。实例退出前反注册，服务对象可留在服务端。
 Skill 测试使用应用预先准备的服务与资源，不创建或删除它们。
 
