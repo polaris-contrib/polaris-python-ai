@@ -17,6 +17,8 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
+from agentscope.permission import PermissionBehavior, PermissionDecision
+from agentscope.tool import ToolBase, Toolkit
 
 from polaris_ai.agentscope import PolarisAgentConfig, PolarisAgentRuntime
 from polaris_ai.agentscope.config import (
@@ -90,6 +92,44 @@ def test_attach_to_agent_can_be_disabled():
         runtime.create_agent(name="weather-agent", system_prompt="No skills", model="model")
     assert agent.call_args.kwargs["toolkit"] is None
     assert agent.call_args.kwargs["middlewares"] == []
+    runtime.close()
+
+
+def test_attach_to_agent_merges_loader_into_custom_toolkit():
+    class EchoTool(ToolBase):
+        name = "echo"
+        description = "Echo input"
+        input_schema = {"type": "object", "properties": {}}
+        is_concurrency_safe = True
+        is_read_only = True
+
+        async def call(self, **kwargs):
+            return kwargs
+
+        async def check_permissions(self, tool_input, context):
+            return PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message="Allowed by the test tool",
+            )
+
+    context = FakeContext(FakeEngine())
+    config = PolarisAgentConfig(a2a=PolarisA2AConfig(enabled=False))
+    runtime = PolarisAgentRuntime(config, sdk_context=context)
+    toolkit = Toolkit(tools=[EchoTool()])
+    with patch("agentscope.agent.Agent") as agent:
+        runtime.create_agent(
+            name="weather-agent", system_prompt="Use skills", model="model", toolkit=toolkit,
+        )
+        runtime.create_agent(
+            name="weather-agent", system_prompt="Use skills", model="model", toolkit=toolkit,
+        )
+
+    assert agent.call_args.kwargs["toolkit"] is toolkit
+    basic = next(group for group in toolkit.tool_groups if group.name == "basic")
+    assert basic.tools
+    assert [runtime.skill_loader] == [
+        loader for loader in basic.skills_or_loaders if loader is runtime.skill_loader
+    ]
     runtime.close()
 
 

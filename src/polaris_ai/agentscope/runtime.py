@@ -120,6 +120,14 @@ class PolarisAgentRuntime:
             self._skill_toolkit = Toolkit(skills_or_loaders=[self.skill_loader])
         return self._skill_toolkit
 
+    def _attach_skill_loader(self, toolkit):
+        for group in toolkit.tool_groups:
+            if group.name == "basic":
+                if self.skill_loader not in group.skills_or_loaders:
+                    group.skills_or_loaders.append(self.skill_loader)
+                return
+        raise ValueError("Toolkit has no basic tool group")
+
     def create_agent(self, *, name: str, system_prompt: str, model, toolkit=None,
                      middlewares=(), **kwargs):
         """Create a native Agent with the configured Polaris Skill attachment."""
@@ -132,6 +140,8 @@ class PolarisAgentRuntime:
                 and self.skill_loader is not None):
             if selected_toolkit is None:
                 selected_toolkit = self.skill_toolkit
+            else:
+                self._attach_skill_loader(selected_toolkit)
             selected_middlewares.append(PolarisDynamicSkillMiddleware(self.skill_loader))
         return Agent(
             name=name,

@@ -298,6 +298,36 @@ class MCPTests(IsolatedAsyncioTestCase):
         self.assertTrue(all(client.closed for client in created))
         self.assertTrue(consumer.watches[0].closed)
 
+    async def test_pool_close_cancellation_completes_watch_and_client_cleanup(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingUnwatchConsumer(FakeConsumer):
+            async def async_unwatch_service(self, watch):
+                started.set()
+                await release.wait()
+                await watch.close()
+
+        consumer = BlockingUnwatchConsumer([instance(protocol="mcp-sse")])
+        with patch("polaris_ai.agentscope.mcp.ConsumerAPI", return_value=consumer):
+            resolver = PolarisMCPResolver(
+                FakeContext(FakeEngine()), client_factory=FakeClient,
+            )
+            pool = PolarisMCPClientPool(resolver, "search-mcp", filter_contract=False)
+            await pool.start()
+            client = pool.clients[0]
+            closing = asyncio.create_task(pool.close())
+            await started.wait()
+            closing.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await closing
+
+        self.assertTrue(consumer.watches[0].closed)
+        self.assertTrue(client.closed)
+        self.assertEqual((), pool.clients)
+        await pool.close()
+
     async def test_native_client_wraps_tool_call_metrics(self):
         reporter = FakeReporter()
         client = PolarisMCPClient(
@@ -438,3 +468,49 @@ class MCPTests(IsolatedAsyncioTestCase):
         self.assertEqual(1, len(reporter.calls))
         self.assertFalse(reporter.calls[0]["success"])
         self.assertTrue(reporter.calls[0]["timeout"])
+
+    async def test_native_client_closes_underlying_stream_when_consumer_closes(self):
+        reporter = FakeReporter()
+        client = PolarisMCPClient(
+            name="search_mcp",
+            is_stateful=False,
+            mcp_config=HttpMCPConfig(url="http://127.0.0.1:8080/mcp"),
+            reporter=reporter,
+            service="search-mcp",
+            host="127.0.0.1",
+            port=8080,
+        )
+        underlying_closed = asyncio.Event()
+
+        class Tool:
+            async def call(self, **kwargs):
+                async def stream():
+                    try:
+                        yield types.SimpleNamespace(
+                            state=ToolResultState.RUNNING,
+                            is_last=False,
+                        )
+                        yield types.SimpleNamespace(
+                            state=ToolResultState.SUCCESS,
+                            is_last=True,
+                        )
+                    finally:
+                        underlying_closed.set()
+
+                return stream()
+
+        tool = Tool()
+
+        async def get_tool(_self, name):
+            return tool
+
+        with patch.object(MCPClient, "get_tool", get_tool):
+            wrapped = await client.get_tool("search")
+            stream = await wrapped.call(query="hello")
+            first = await stream.__anext__()
+            self.assertFalse(first.is_last)
+            await stream.aclose()
+
+        self.assertTrue(underlying_closed.is_set())
+        self.assertEqual(1, len(reporter.calls))
+        self.assertFalse(reporter.calls[0]["success"])

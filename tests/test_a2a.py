@@ -276,7 +276,9 @@ class AsyncA2ATests(IsolatedAsyncioTestCase):
             return function(*args)
 
         with patch("polaris_ai.a2a.registry.asyncio.to_thread", side_effect=completed_worker):
-            task = asyncio.create_task(registrar.async_register(card(), [A2ATransport("10.0.0.1", 8080)]))
+            task = asyncio.create_task(
+                registrar.async_register(card(), [A2ATransport("10.0.0.1", 8080)])
+            )
             with self.assertRaises(asyncio.CancelledError):
                 await task
         self.assertEqual((), registrar.registered)
@@ -316,3 +318,22 @@ class AsyncA2ATests(IsolatedAsyncioTestCase):
                 raise RuntimeError("server failed")
         self.assertEqual((), registrar.registered)
         self.assertEqual(1, len(engine.deregister_calls))
+
+    async def test_server_registration_close_can_retry_failed_deregistration(self):
+        engine = FakeEngine()
+        context = FakeContext(engine)
+        registrar = PolarisA2ARegistrar(context, service_token="token")
+        registration = PolarisA2AServerRegistration(
+            registrar, card(), [A2ATransport("10.0.0.1", 8080)]
+        )
+        await registration.async_start()
+        engine.deregister_failures.add("id-1")
+
+        await registration.async_close()
+        self.assertEqual(1, len(registrar.registered))
+        self.assertTrue(registration.registered)
+
+        engine.deregister_failures.clear()
+        await registration.async_close()
+        self.assertEqual((), registrar.registered)
+        self.assertFalse(registration.registered)

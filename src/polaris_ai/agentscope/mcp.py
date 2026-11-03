@@ -159,6 +159,8 @@ class PolarisMCPClient(MCPClient):
                             success=success,
                             ret_code=None if success else -1,
                         )
+                    finally:
+                        await await_completion(result.aclose())
 
                 return reported_stream()
 
@@ -371,6 +373,8 @@ class PolarisMCPClientPool:
 
     async def start(self):
         """Load clients once and subscribe to service cache lifecycle events."""
+        if self._closed:
+            raise RuntimeError("MCP client pool is closed")
         if self._task is not None:
             return self
         loop = asyncio.get_running_loop()
@@ -488,6 +492,17 @@ class PolarisMCPClientPool:
 
         await await_completion(close_all())
 
+    async def _close_resources(self, task):
+        if task is not None:
+            await task
+        if self._watch is not None:
+            watch = self._watch
+            await self.resolver.consumer.async_unwatch_service(watch)
+            if self._watch is watch:
+                self._watch = None
+        clients, self._clients = tuple(self._clients.values()), {}
+        await self._close_clients(clients)
+
     def choose_client(self):
         """Return the next connected client using round-robin selection."""
         clients = list(self._clients.values())
@@ -500,18 +515,10 @@ class PolarisMCPClientPool:
 
     async def close(self):
         """Stop watch updates and close all owned MCP clients."""
-        if self._closed:
-            return
         self._closed = True
         self._refresh_event.set()
         task, self._task = self._task, None
-        if task is not None:
-            await task
-        if self._watch is not None:
-            await self.resolver.consumer.async_unwatch_service(self._watch)
-            self._watch = None
-        clients, self._clients = tuple(self._clients.values()), {}
-        await self._close_clients(clients)
+        await await_completion(self._close_resources(task))
 
     async def __aenter__(self):
         return await self.start()

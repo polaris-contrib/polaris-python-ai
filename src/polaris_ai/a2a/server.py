@@ -21,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 
+from polaris_ai._async import await_completion
+
 
 class PolarisA2AServerRegistration:
     """Register an A2A endpoint after its server becomes ready.
@@ -78,11 +80,10 @@ class PolarisA2AServerRegistration:
 
     async def async_close(self):
         async with self._lock:
-            if self._closed:
-                return
             self._closed = True
-            if self._registered:
-                await self._registrar.async_close()
+            await await_completion(self._registrar.async_close())
+            if not self._registrar.registered:
+                self._registered = False
 
     async def __aenter__(self):
         return await self.async_start()
