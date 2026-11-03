@@ -31,6 +31,7 @@ from polaris_ai.a2a import (
     AgentCardNotFoundError,
     PolarisA2ARegistrar,
     PolarisA2AResolver,
+    PolarisA2AServerRegistration,
 )
 from polaris_ai.a2a._card import decode_card, encode_card
 from tests._support import FakeContext, FakeEngine, instance, snapshot
@@ -85,6 +86,14 @@ class RegistrarTests(TestCase):
             ])
         self.assertEqual(["id-2"], [r.instance_id for r in self.engine.deregister_calls])
         self.assertEqual(["id-1"], [r.instance_id for r in self.registrar.registered])
+
+    def test_empty_service_token_is_allowed_for_unauthenticated_registries(self):
+        registrar = PolarisA2ARegistrar(self.context, service_token="")
+        registrar.register(card(), [A2ATransport("10.0.0.1", 8080)])
+        registrar.close()
+        self.assertEqual((), registrar.registered)
+        self.assertEqual([""], [r.service_token for r in self.engine.register_calls])
+        self.assertEqual([""], [r.service_token for r in self.engine.deregister_calls])
 
     def test_failed_rollback_and_close_can_be_retried(self):
         self.engine.register_failure_at = 2
@@ -272,3 +281,38 @@ class AsyncA2ATests(IsolatedAsyncioTestCase):
                 await task
         self.assertEqual((), registrar.registered)
         self.assertEqual(["id-1"], [r.instance_id for r in engine.deregister_calls])
+
+    async def test_server_registration_waits_for_ready_event_and_closes_registrar(self):
+        engine = FakeEngine()
+        context = FakeContext(engine)
+        registrar = PolarisA2ARegistrar(context, service_token="")
+        ready = asyncio.Event()
+        registration = PolarisA2AServerRegistration(
+            registrar,
+            card(),
+            [A2ATransport("10.0.0.1", 8080)],
+            server_ready=ready,
+        )
+        starting = asyncio.create_task(registration.async_start())
+        await asyncio.sleep(0)
+        self.assertFalse(registration.registered)
+        self.assertEqual([], engine.register_calls)
+        ready.set()
+        self.assertIs(registration, await starting)
+        self.assertTrue(registration.registered)
+        await registration.async_close()
+        self.assertEqual((), registrar.registered)
+        self.assertEqual(1, len(engine.deregister_calls))
+
+    async def test_server_registration_cleans_up_when_body_raises(self):
+        engine = FakeEngine()
+        context = FakeContext(engine)
+        registrar = PolarisA2ARegistrar(context, service_token="token")
+        registration = PolarisA2AServerRegistration(
+            registrar, card(), [A2ATransport("10.0.0.1", 8080)]
+        )
+        with self.assertRaises(RuntimeError):
+            async with registration:
+                raise RuntimeError("server failed")
+        self.assertEqual((), registrar.registered)
+        self.assertEqual(1, len(engine.deregister_calls))

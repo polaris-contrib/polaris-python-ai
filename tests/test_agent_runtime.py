@@ -24,6 +24,7 @@ from polaris_ai.agentscope.config import (
     PolarisMCPConfig,
     PolarisSkillConfig,
 )
+from polaris_ai.agentscope.middleware import PolarisDynamicSkillMiddleware
 from tests._support import FakeContext, FakeEngine
 
 
@@ -55,17 +56,41 @@ def test_runtime_closes_owned_context_and_adapter_resources():
     assert context.is_destroy()
 
 
-def test_missing_registry_token_fails_and_cleans_created_context():
+def test_runtime_allows_empty_registry_service_token():
     context = FakeContext(FakeEngine())
     config = PolarisAgentConfig()
     with patch("polaris_ai.agentscope.context.init_context_by_config", return_value=context):
-        try:
-            PolarisAgentRuntime(config)
-        except ValueError as error:
-            assert "service_token" in str(error)
-        else:
-            raise AssertionError("Expected missing service token to fail")
+        runtime = PolarisAgentRuntime(config)
+    assert runtime.registrar is not None
+    assert runtime.registrar.service_token == ""
+    runtime.close()
     assert context.is_destroy()
+
+
+def test_attach_to_agent_builds_toolkit_and_dynamic_middleware():
+    context = FakeContext(FakeEngine())
+    config = PolarisAgentConfig(a2a=PolarisA2AConfig(enabled=False))
+    runtime = PolarisAgentRuntime(config, sdk_context=context)
+    with patch("agentscope.agent.Agent") as agent:
+        runtime.create_agent(name="weather-agent", system_prompt="Use skills", model="model")
+    assert agent.call_args.kwargs["toolkit"] is runtime.skill_toolkit
+    assert isinstance(agent.call_args.kwargs["middlewares"][-1], PolarisDynamicSkillMiddleware)
+    runtime.close()
+
+
+def test_attach_to_agent_can_be_disabled():
+    context = FakeContext(FakeEngine())
+    config = PolarisAgentConfig(
+        a2a=PolarisA2AConfig(enabled=False),
+        skill=PolarisSkillConfig(attach_to_agent=False),
+    )
+    runtime = PolarisAgentRuntime(config, sdk_context=context)
+    assert runtime.skill_toolkit is None
+    with patch("agentscope.agent.Agent") as agent:
+        runtime.create_agent(name="weather-agent", system_prompt="No skills", model="model")
+    assert agent.call_args.kwargs["toolkit"] is None
+    assert agent.call_args.kwargs["middlewares"] == []
+    runtime.close()
 
 
 def test_runtime_builds_mcp_resolver_only_when_enabled():

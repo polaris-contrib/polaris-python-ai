@@ -25,6 +25,7 @@ import tempfile
 import time
 import zipfile
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from threading import RLock
 
@@ -38,6 +39,7 @@ except ImportError as error:
 
 from polaris.api.consumer import ConsumerAPI
 from polaris.api.skill import SkillAPI
+from polaris.pkg.model.error import ServerCode
 from polaris.pkg.model.service import ExtendedMetadata, GetAllInstancesRequest
 from polaris.pkg.model.skill import SkillDownloadRequest, SkillListRequest
 
@@ -46,6 +48,19 @@ from polaris_ai._async import await_completion
 logger = logging.getLogger(__name__)
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_FILES = 2048
+
+
+@dataclass(frozen=True)
+class PolarisSkillRepositoryInfo:
+    """Read-only repository identity exposed to AgentScope applications."""
+
+    type: str
+    location: str
+    writeable: bool = False
+
+
+class PolarisSkillNotFoundError(LookupError):
+    """The requested Skill does not exist in the selected Polaris repository."""
 
 
 class PolarisSkillLoader(SkillLoaderBase):
@@ -105,6 +120,32 @@ class PolarisSkillLoader(SkillLoaderBase):
         if self._closed or self._context.is_destroy():
             raise RuntimeError("Skill loader or SDKContext is closed")
 
+    @property
+    def repository_type(self) -> str:
+        return "polaris-mounted" if self.service_name else "polaris"
+
+    @property
+    def source(self) -> str:
+        if self.service_name:
+            return f"polaris-mounted:{self.namespace}/{self.service_name}"
+        return f"polaris:{self.namespace}"
+
+    @property
+    def location(self) -> str:
+        if self.service_name:
+            return f"namespace:{self.namespace}/{self.service_name}"
+        return f"namespace:{self.namespace}"
+
+    def is_writeable(self) -> bool:
+        return False
+
+    def get_repository_info(self) -> PolarisSkillRepositoryInfo:
+        return PolarisSkillRepositoryInfo(
+            type=self.repository_type,
+            location=self.location,
+            writeable=self.is_writeable(),
+        )
+
     async def list_skills(self) -> list[Skill]:
         """Return native AgentScope Skills; failed downloads are skipped and retried later."""
         async with self._lock:
@@ -135,6 +176,31 @@ class PolarisSkillLoader(SkillLoaderBase):
                     raise LookupError(f"Skill {name!r} is not mounted on {self.service_name!r}")
                 resolved = mounts[name]
             return await self._load_skill(name, resolved)
+
+    async def async_list_skill_names(self) -> list[str]:
+        """Refresh repository references and return names without downloading ZIPs."""
+        async with self._lock:
+            self._check_open()
+            await self._refresh_refs()
+            self._check_open()
+            return [name for name, _ in self._refs]
+
+    async def async_skill_exists(self, name: str) -> bool:
+        """Check whether a Skill is available in the selected repository."""
+        if not isinstance(name, str) or not name.strip():
+            return False
+        name = name.strip()
+        if self.service_name:
+            async with self._lock:
+                self._check_open()
+                await self._refresh_refs()
+                self._check_open()
+                return name in dict(self._refs)
+        try:
+            await self.async_get_skill(name)
+        except Exception:
+            return False
+        return True
 
     async def _refresh_refs(self):
         if self.names:
@@ -203,8 +269,19 @@ class PolarisSkillLoader(SkillLoaderBase):
         response = await self._skill_api.async_download_skill(SkillDownloadRequest(
             namespace=self.namespace, name=name, version=version, timeout=self.timeout, format="zip",
         ))
-        if response is None or response.code not in (0, 200000) or not response.data:
+        if response is None:
             raise RuntimeError(f"Failed to download skill {name!r}")
+        if response.code == ServerCode.NotFoundResource:
+            raise PolarisSkillNotFoundError(
+                f"Skill {name!r} was not found in {self.namespace!r}"
+            )
+        if response.code not in (0, ServerCode.ExecuteSuccess):
+            detail = f", info={response.info!r}" if response.info else ""
+            raise RuntimeError(
+                f"Failed to download skill {name!r} (code={response.code}{detail})"
+            )
+        if not response.data:
+            raise RuntimeError(f"Failed to download skill {name!r} (empty ZIP)")
         # Extraction is isolated from the event loop and close cannot race filesystem writes.
         return await await_completion(asyncio.to_thread(self._materialize, key, response.data))
 

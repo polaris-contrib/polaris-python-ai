@@ -30,9 +30,12 @@ __all__ = [
     "build_agent_card",
     "PolarisA2ARegistrar",
     "PolarisA2AResolver",
+    "PolarisA2AServerRegistration",
     "A2ATransport",
     "AgentCardNotFoundError",
     "RegisteredInstance",
+    "PolarisSkillNotFoundError",
+    "PolarisSkillRepositoryInfo",
 ]
 
 
@@ -55,6 +58,10 @@ def __getattr__(name: str):
         module = ".mcp"
     elif name in ("PolarisAgentCardTemplate", "build_agent_card"):
         module = ".cards"
+    elif name == "PolarisA2AServerRegistration":
+        module = "polaris_ai.a2a.server"
+    elif name in ("PolarisSkillNotFoundError", "PolarisSkillRepositoryInfo"):
+        module = ".skill"
     else:
         module = "polaris_ai.a2a"
     value = getattr(import_module(module, __name__), name)

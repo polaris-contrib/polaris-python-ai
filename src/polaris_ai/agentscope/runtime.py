@@ -21,6 +21,7 @@ from polaris_ai._async import await_completion
 from polaris_ai.a2a import PolarisA2ARegistrar, PolarisA2AResolver
 from polaris_ai.agentscope.config import PolarisAgentConfig
 from polaris_ai.agentscope.context import PolarisAgentContext
+from polaris_ai.agentscope.middleware import PolarisDynamicSkillMiddleware
 from polaris_ai.agentscope.skill import PolarisSkillLoader
 
 
@@ -51,6 +52,7 @@ class PolarisAgentRuntime:
         self.resolver: PolarisA2AResolver | None = None
         self.registrar: PolarisA2ARegistrar | None = None
         self.mcp_resolver = None
+        self._skill_toolkit = None
         self._closed = False
         try:
             if config.skill.enabled:
@@ -69,8 +71,6 @@ class PolarisAgentRuntime:
             if config.a2a.enabled and config.a2a.discovery.enabled:
                 self.resolver = PolarisA2AResolver(self.context.context, config.namespace)
             if config.a2a.enabled and config.a2a.registry.enabled:
-                if not config.service_token:
-                    raise ValueError("service_token is required when A2A registry is enabled")
                 self.registrar = PolarisA2ARegistrar(
                     self.context.context,
                     config.namespace,
@@ -106,6 +106,41 @@ class PolarisAgentRuntime:
     @property
     def skill(self):
         return self.context.skill
+
+    @property
+    def skill_toolkit(self):
+        """Build the Toolkit selected by ``skill.attach_to_agent``."""
+        self._check_open()
+        if (not self.config.skill.enabled or not self.config.skill.attach_to_agent
+                or self.skill_loader is None):
+            return None
+        if self._skill_toolkit is None:
+            from agentscope.tool import Toolkit
+
+            self._skill_toolkit = Toolkit(skills_or_loaders=[self.skill_loader])
+        return self._skill_toolkit
+
+    def create_agent(self, *, name: str, system_prompt: str, model, toolkit=None,
+                     middlewares=(), **kwargs):
+        """Create a native Agent with the configured Polaris Skill attachment."""
+        self._check_open()
+        from agentscope.agent import Agent
+
+        selected_toolkit = toolkit
+        selected_middlewares = list(middlewares)
+        if (self.config.skill.enabled and self.config.skill.attach_to_agent
+                and self.skill_loader is not None):
+            if selected_toolkit is None:
+                selected_toolkit = self.skill_toolkit
+            selected_middlewares.append(PolarisDynamicSkillMiddleware(self.skill_loader))
+        return Agent(
+            name=name,
+            system_prompt=system_prompt,
+            model=model,
+            toolkit=selected_toolkit,
+            middlewares=selected_middlewares,
+            **kwargs,
+        )
 
     def _check_open(self):
         if getattr(self, "_closed", True):

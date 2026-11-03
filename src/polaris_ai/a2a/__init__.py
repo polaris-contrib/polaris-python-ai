@@ -17,6 +17,7 @@
 
 from .registry import A2ATransport, PolarisA2ARegistrar, RegisteredInstance
 from .resolver import AgentCardNotFoundError, PolarisA2AResolver
+from .server import PolarisA2AServerRegistration
 
 __all__ = [
     "A2ATransport",
@@ -24,4 +25,5 @@ __all__ = [
     "RegisteredInstance",
     "AgentCardNotFoundError",
     "PolarisA2AResolver",
+    "PolarisA2AServerRegistration",
 ]

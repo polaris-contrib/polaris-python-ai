@@ -35,7 +35,11 @@ from polaris.pkg.model.skill import (
     SkillVersionInfo,
 )
 
-from polaris_ai.agentscope import PolarisSkillLoader
+from polaris_ai.agentscope import (
+    PolarisSkillLoader,
+    PolarisSkillNotFoundError,
+    PolarisSkillRepositoryInfo,
+)
 from tests._support import FakeContext, FakeEngine, skill_zip, snapshot
 
 
@@ -92,6 +96,16 @@ class SkillTests(IsolatedAsyncioTestCase):
         self.assertEqual([0, 2], [r.offset for r in calls])
         self.assertEqual([2, 2], [r.limit for r in calls])
 
+    async def test_list_skill_names_does_not_download_archives(self):
+        self.engine.pages = [
+            SkillListResponse(total=3, resources=self.resources("weather", "search", "sql")),
+        ]
+        loader = self.loader()
+        self.assertEqual(["weather", "search", "sql"], await loader.async_list_skill_names())
+        self.assertEqual(
+            ["list_skills"], [method for method, _ in self.engine.skill_calls]
+        )
+
     async def test_list_ttl_refreshes_and_loads_new_active_version(self):
         resource1 = self.resources("weather")
         resource2 = [SkillResource(name="weather", version_info=SkillVersionInfo(active_version="v2"))]
@@ -133,6 +147,14 @@ class SkillTests(IsolatedAsyncioTestCase):
         with self.assertRaises(LookupError):
             await loader.async_get_skill("unmounted")
 
+    async def test_mounted_skill_exists_checks_metadata_without_download(self):
+        self.engine.snapshot = snapshot(mounts=[("default:weather", "mounted", "")])
+        loader = self.loader(service_name="weather-agent")
+        self.assertTrue(await loader.async_skill_exists("weather"))
+        self.assertFalse(await loader.async_skill_exists("missing"))
+        self.assertEqual(1, len(self.engine.discovery_calls))
+        self.assertEqual([], self.engine.skill_calls)
+
     async def test_empty_mounts_are_requeried_and_empty_published_list_is_cached(self):
         loader = self.loader(service_name="weather-agent")
         self.assertEqual([], await loader.list_skills())
@@ -159,6 +181,30 @@ class SkillTests(IsolatedAsyncioTestCase):
         self.download()
         self.assertEqual("weather", (await loader.list_skills())[0].name)
         self.assertEqual(2, len(self.engine.skill_calls))
+
+    async def test_not_found_download_uses_dedicated_exception(self):
+        self.engine.downloads[("weather", "v1")] = SkillDownloadResponse(
+            version="", content_type="application/zip", code=400202, info="not found"
+        )
+        loader = self.loader(names=["weather"], version="v1")
+        with self.assertRaises(PolarisSkillNotFoundError):
+            await loader.async_get_skill("weather")
+        self.assertFalse(await loader.async_skill_exists("weather"))
+
+    async def test_repository_info_and_source_are_exposed(self):
+        published = self.loader()
+        self.assertEqual("polaris:default", published.source)
+        self.assertEqual(PolarisSkillRepositoryInfo(
+            type="polaris", location="namespace:default", writeable=False,
+        ), published.get_repository_info())
+        self.assertFalse(published.is_writeable())
+
+        mounted = self.loader(service_name="weather-agent")
+        self.assertEqual("polaris-mounted:default/weather-agent", mounted.source)
+        self.assertEqual(PolarisSkillRepositoryInfo(
+            type="polaris-mounted", location="namespace:default/weather-agent",
+            writeable=False,
+        ), mounted.get_repository_info())
 
     async def test_nested_archive_and_bom_frontmatter(self):
         self.download(data=skill_zip("weather/", markdown=(

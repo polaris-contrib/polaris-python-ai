@@ -36,7 +36,7 @@ export POLARIS_E2E_NAMESPACE=python-agentscope-e2e
 ./examples/verify_e2e.sh --only agentscope/a2a/provider
 ```
 
-A2A 需服务 token；已发布 Skill 需预先发布的 POLARIS_SKILL_NAME；
+A2A 在服务端开启鉴权时需服务 token，未开启鉴权可为空；已发布 Skill 需预先发布的 POLARIS_SKILL_NAME；
 挂载 Skill 需预先挂载的 POLARIS_AGENT_SERVICE。每个场景只检查自己需要的变量，
 缺失时失败退出，不会悄悄切回离线替身。Skill 场景只读取和下载，不上传、不发布。
 真实 A2A 注册实例后发现它，保持超过两个 TTL，再反注册并等待发现结果移除。

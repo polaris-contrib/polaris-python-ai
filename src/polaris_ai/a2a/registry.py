@@ -62,21 +62,23 @@ class RegisteredInstance:
 class PolarisA2ARegistrar:
     """Track registrations and clean them up without closing the supplied SDKContext.
 
-    The SDK requires ``service_token`` for register, heartbeat and deregister.
-    It is distinct from the connector's authentication token. Heartbeat and
-    instance-not-found re-registration are managed by ProviderAPI.register_instance.
+    ``service_token`` is used for register, heartbeat and deregistration and is
+    distinct from the connector's authentication token. It may be empty for
+    registries without service authentication. Heartbeat and instance-not-found
+    re-registration are managed by ProviderAPI.register_instance.
     """
 
-    def __init__(self, sdk_context, namespace: str = "default", *, service_token: str, ttl: int = 5):
+    def __init__(self, sdk_context, namespace: str = "default", *, service_token: str = "",
+                 ttl: int = 5):
         if sdk_context is None or sdk_context.is_destroy():
             raise ValueError("An active SDKContext is required")
-        if not isinstance(service_token, str) or not service_token.strip():
-            raise ValueError("service_token is required by the Polaris Provider API")
+        if not isinstance(service_token, str):
+            raise ValueError("service_token must be a string")
         if type(ttl) is not int or not 0 < ttl <= 0xFFFFFFFF:
             raise ValueError("ttl must be a positive uint32 number of seconds")
         self.namespace = namespace.strip() or "default"
         self.ttl = ttl
-        self.service_token = service_token
+        self.service_token = service_token.strip()
         self._context = sdk_context
         self._provider = ProviderAPI(sdk_context)
         self._registered: list[RegisteredInstance] = []

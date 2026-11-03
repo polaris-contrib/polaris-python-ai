@@ -50,6 +50,9 @@ async with PolarisAgentRuntime(config) as runtime:
 `POLARIS_SERVICE_TOKEN` 和 `POLARIS_SKILL_SERVER_ADDRESS` 作为回退。connector
 token 与 service token 保持分离。显式传入 `sdk_context` 时只借用，不改配置、
 不接管生命周期。
+`skill.attach_to_agent` 为 true 时，`runtime.skill_toolkit` 会创建包含 Polaris
+loader 的原生 Toolkit；`runtime.create_agent()` 会同时接入 Toolkit 和动态刷新
+Middleware。
 
 ## Skill 加载
 
@@ -78,6 +81,10 @@ asyncio.run(main())
 
 成功下载按名称和请求版本缓存；失败不会缓存。列表失败直接抛错，单个下载失败会记录日志并跳过，
 下次重试。空的已发布列表缓存 30 秒，空挂载表下次重新查询。
+`async_list_skill_names()` 只刷新引用列表，不下载 ZIP；挂载模式的
+`async_skill_exists()` 只检查挂载表。服务端返回 `400202` 时抛
+`PolarisSkillNotFoundError`。loader 暴露 `source`、`location`、
+`get_repository_info()` 和只读标识。
 
 下载 ZIP 中的 `SKILL.md` 和资源解压到临时目录，支持平铺或单一顶层 Skill 目录。
 拒绝越界 / 绝对路径、链接、冲突文件和多 Skill 根目录，压缩与解压大小上限 64 MiB，
@@ -101,11 +108,14 @@ async with PolarisA2ARegistrar(context, service_token="service-token") as regist
 
 每个 transport 注册一个普通实例，写入 `ai-agent-name`、`a2a.agent.card`、
 `a2a.transport` 和 `a2a.path`。自动心跳和实例不存在重注册复用 SDK，TTL 默认 5 秒。
-当前 ProviderAPI 要求显式传入 `service_token`，它与 connector token 是两个配置。
+`service_token` 用于注册、心跳和反注册，它与 connector token 是两个配置；可为空，
+由服务端决定是否接受无鉴权注册。
 业务实例地址由 `A2ATransport.host` 指定，SDK `bindIP` 不作为业务实例 host。
 
 部分注册失败回滚本次成功实例；反注册失败记录保留在 `registered`，可再次 `close()` 重试。
 取消注册会等待在途请求完成并回滚，关闭后禁止新注册。
+`PolarisA2AServerRegistration` 可等待 `server_ready` 事件后再注册，退出或异常时
+统一反注册，用于替代 Java Server / Spring 的生命周期装配。
 
 每次解析重新发现，按健康 `host:port` 保持粘性并读取最新卡片；实例移除、不健康、隔离或
 卡片失效后切换。SDK 查询异常时复用此前成功卡片；成功空结果抛 `AgentCardNotFoundError`。

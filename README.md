@@ -57,6 +57,9 @@ async with PolarisAgentRuntime(config) as runtime:
 `POLARIS_SKILL_SERVER_ADDRESS` are accepted as fallbacks. Connector and service
 tokens remain separate. Passing an explicit `sdk_context` borrows it and never
 changes its configuration or ownership.
+When `skill.attach_to_agent` is true, `runtime.skill_toolkit` builds a native
+Toolkit containing the Polaris loader, and `runtime.create_agent()` attaches that
+Toolkit plus the dynamic refresh middleware.
 
 ## AgentScope Skill Loader
 
@@ -92,6 +95,10 @@ Successful loads are cached by requested name/version; failures are retried.
 Persistent offline fallback is provided by the SDK, not a second adapter cache.
 Published list errors propagate; an individual failed download is logged and
 skipped. Empty mount tables are re-read on the next call.
+`async_list_skill_names()` refreshes references without downloading ZIPs, and
+mounted `async_skill_exists()` checks only the mount table. A `400202` response
+raises `PolarisSkillNotFoundError`. The loader exposes `source`, `location`,
+`get_repository_info()`, and its read-only identity.
 
 `list_skills()` follows AgentScope's asynchronous interface. Explicit single-skill
 loading is `async_get_skill()`. `close()` and `async_close()` remove temporary assets.
@@ -114,13 +121,18 @@ async with PolarisA2ARegistrar(context, service_token="service-token") as regist
 Each transport becomes a Polaris instance. Metadata includes `ai-agent-name`,
 `a2a.agent.card`, `a2a.transport` and `a2a.path`; TLS selects `http` or `https`.
 Automatic heartbeat and re-registration use the SDK's `register_instance` with a
-5-second TTL. `service_token` is required by the current Python Provider API and
-is distinct from the connector token. The SDK's `bindIP` is not a business host.
+5-second TTL. `service_token` is used for registration, heartbeats and
+deregistration, is distinct from the connector token, and may be empty when the
+server permits unauthenticated registration. The SDK's `bindIP` is not a business
+host.
 
 Partial registration failure rolls back only that call's created instances.
 Failed deregistrations stay in `registrar.registered`, so another `close()` can
 retry. Cancelled registration waits for in-flight SDK work and rolls back its
 successes. A closed registrar accepts further cleanup, but no new registrations.
+`PolarisA2AServerRegistration` waits for `server_ready` before registration and
+deregisters on normal or exceptional exit, replacing the Java Server / Spring
+lifecycle assembly.
 
 The resolver refreshes discovery on every lookup and stays on the selected
 healthy `host:port`. It sees card updates in place and switches when that instance

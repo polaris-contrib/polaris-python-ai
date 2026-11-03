@@ -28,7 +28,12 @@ from examples._internal._runtime import get_local_host
 from examples.agentscope._common import context, parser
 from examples.agentscope.a2a.provider.server import create_server
 from examples.agentscope.a2a.provider.skill_agent import create_skill_agent
-from polaris_ai.agentscope import A2ATransport, PolarisA2ARegistrar, PolarisSkillLoader
+from polaris_ai.agentscope import (
+    A2ATransport,
+    PolarisA2ARegistrar,
+    PolarisA2AServerRegistration,
+    PolarisSkillLoader,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +52,6 @@ async def main(argv=None):
     arguments.add_argument("--skill-service")
     arguments.add_argument("--service-token", default=os.environ.get("POLARIS_SERVICE_TOKEN", ""))
     args = arguments.parse_args(argv)
-    if not args.service_token:
-        arguments.error("--service-token or POLARIS_SERVICE_TOKEN is required")
     args.host = args.host or get_local_host(args.address or "127.0.0.1:8091")
     family = socket.AF_INET6 if ":" in args.host else socket.AF_INET
     listener = socket.create_server((args.host, args.port), family=family)
@@ -103,13 +106,16 @@ async def main(argv=None):
                         await serving
                         raise RuntimeError("A2A server stopped before startup")
                     await asyncio.sleep(0.01)
-            async with PolarisA2ARegistrar(
-                sdk,
-                args.namespace,
-                service_token=args.service_token,
-                ttl=args.ttl,
-            ) as registrar:
-                await registrar.async_register(card, [A2ATransport(args.host, port)])
+            async with PolarisA2AServerRegistration(
+                PolarisA2ARegistrar(
+                    sdk,
+                    args.namespace,
+                    service_token=args.service_token,
+                    ttl=args.ttl,
+                ),
+                card,
+                [A2ATransport(args.host, port)],
+            ):
                 print(f"Registered {args.namespace}/{args.service} at {args.host}:{port}", flush=True)
                 await asyncio.shield(serving)
     finally:
