@@ -13,12 +13,14 @@
 # CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 
 import pytest
 
 pytest.importorskip("agentscope.middleware")
 
+from agentscope.tool import Toolkit
 from polaris.pkg.model.skill import (
     SkillDownloadResponse,
     SkillListResponse,
@@ -65,3 +67,45 @@ class DynamicSkillMiddlewareTests(IsolatedAsyncioTestCase):
             events = [event async for event in middleware.on_reply(None, {}, next_handler)]
             self.assertEqual(["reply"], events)
             self.assertEqual((), middleware.last_skills)
+
+    async def test_refresh_failure_falls_back_in_real_toolkit(self):
+        engine = FakeEngine()
+        context = FakeContext(engine)
+        engine.pages = [
+            SkillListResponse(
+                1,
+                [SkillResource(name="weather", version_info=SkillVersionInfo(active_version="v1"))],
+            )
+        ]
+        engine.downloads[("weather", "v1")] = SkillDownloadResponse(
+            version="v1", content_type="application/zip", data=skill_zip(name="weather")
+        )
+        async with PolarisSkillLoader(context) as loader:
+            toolkit = Toolkit(skills_or_loaders=[loader])
+            agent = SimpleNamespace(toolkit=toolkit)
+            middleware = PolarisDynamicSkillMiddleware(loader)
+
+            async def next_handler():
+                yield "reply"
+
+            [event async for event in middleware.on_reply(agent, {}, next_handler)]
+            self.assertIn("weather", await toolkit.get_skill_instructions())
+
+            loader.refresh_interval = 0
+            engine.pages = [RuntimeError("Polaris unavailable")]
+            [event async for event in middleware.on_reply(agent, {}, next_handler)]
+            self.assertIn("weather", await toolkit.get_skill_instructions())
+
+            engine.pages = [
+                SkillListResponse(
+                    1,
+                    [SkillResource(name="weather", version_info=SkillVersionInfo(active_version="v2"))],
+                )
+            ]
+            engine.downloads[("weather", "v2")] = SkillDownloadResponse(
+                version="v2", content_type="application/zip", data=skill_zip(name="weather")
+            )
+            [event async for event in middleware.on_reply(agent, {}, next_handler)]
+            self.assertIn("weather", await toolkit.get_skill_instructions())
+            basic = toolkit.tool_groups[0]
+            self.assertNotIn(loader, basic.skills_or_loaders)

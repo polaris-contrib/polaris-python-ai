@@ -328,6 +328,40 @@ class MCPTests(IsolatedAsyncioTestCase):
         self.assertEqual((), pool.clients)
         await pool.close()
 
+    async def test_pool_close_waits_for_manual_refresh_and_closes_new_client(self):
+        first = instance(port=8080, protocol="mcp-sse")
+        second = instance(port=8081, protocol="mcp-sse")
+        consumer = FakeConsumer([first])
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingConnectClient(FakeClient):
+            async def connect(self):
+                self.connected = True
+                if self.kwargs["port"] == 8081:
+                    started.set()
+                    await release.wait()
+
+        with patch("polaris_ai.agentscope.mcp.ConsumerAPI", return_value=consumer):
+            resolver = PolarisMCPResolver(
+                FakeContext(FakeEngine()), client_factory=BlockingConnectClient,
+            )
+            pool = PolarisMCPClientPool(resolver, "search-mcp", filter_contract=False)
+            await pool.start()
+            consumer.instances = [second]
+            refreshing = asyncio.create_task(pool.refresh())
+            await started.wait()
+
+            closing = asyncio.create_task(pool.close())
+            await asyncio.sleep(0)
+            self.assertFalse(closing.done())
+            release.set()
+            await refreshing
+            await closing
+
+        self.assertEqual((), pool.clients)
+        self.assertTrue(consumer.watches[0].closed)
+
     async def test_native_client_wraps_tool_call_metrics(self):
         reporter = FakeReporter()
         client = PolarisMCPClient(

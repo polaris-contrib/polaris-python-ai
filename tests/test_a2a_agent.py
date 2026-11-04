@@ -16,6 +16,7 @@
 import asyncio
 from unittest import IsolatedAsyncioTestCase
 
+from agentscope.event import ReplyStartEvent
 from agentscope.message import Msg, TextBlock
 
 from polaris_ai.agentscope import PolarisA2AAgent
@@ -40,10 +41,12 @@ class FakeResolver:
 
 
 class FakeAgent:
-    def __init__(self, card, *, error=None, error_after_event=False):
+    def __init__(self, card, *, error=None, error_after_event=False,
+                 local_start_event=False):
         self.card = card
         self.error = error
         self.error_after_event = error_after_event
+        self.local_start_event = local_start_event
         self.closed = False
 
     async def __aenter__(self):
@@ -53,6 +56,8 @@ class FakeAgent:
         self.closed = True
 
     async def reply_stream(self, inputs, *, yield_final_msg=False):
+        if self.local_start_event:
+            yield ReplyStartEvent(session_id="session", reply_id="reply", name="remote")
         if self.error_after_event:
             yield "event"
         if self.error is not None:
@@ -81,6 +86,18 @@ class BlockingAgent:
         yield Msg(name="assistant", role="assistant", content=[TextBlock(text="late")])
 
 
+class BlockingCloseAgent(FakeAgent):
+    def __init__(self):
+        super().__init__("card-1")
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+
+    async def aclose(self):
+        self.close_started.set()
+        await self.release_close.wait()
+        self.closed = True
+
+
 class FakeReporter:
     def __init__(self):
         self.calls = []
@@ -107,6 +124,26 @@ class PolarisA2AAgentTests(IsolatedAsyncioTestCase):
             self.assertFalse(second.closed)
         self.assertTrue(second.closed)
         self.assertTrue(resolver.closed)
+
+    async def test_local_reply_start_event_does_not_block_network_retry(self):
+        first = FakeAgent(
+            "card-1",
+            error=OSError("connection reset"),
+            local_start_event=True,
+        )
+        second = FakeAgent("card-2")
+        agents = [first, second]
+        resolver = FakeResolver(["card-1", "card-2"])
+        async with PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: agents.pop(0),
+        ) as agent:
+            reply = await agent.reply("hello")
+        self.assertEqual("replaced", reply.get_text_content())
+        self.assertEqual(2, resolver.resolve_calls)
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
 
     async def test_business_error_does_not_switch_instance(self):
         first = FakeAgent("card-1", error=RuntimeError("business failure"))
@@ -177,3 +214,22 @@ class PolarisA2AAgentTests(IsolatedAsyncioTestCase):
         self.assertEqual("a2a", reporter.calls[0]["instance_type"])
         self.assertEqual("10.0.0.1", reporter.calls[0]["host"])
         self.assertTrue(reporter.calls[0]["success"])
+
+    async def test_cancelled_aclose_completes_client_and_resolver_cleanup(self):
+        first = BlockingCloseAgent()
+        resolver = FakeResolver(["card-1"])
+        agent = PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: first,
+        )
+        await agent.reply("hello")
+        closing = asyncio.create_task(agent.aclose())
+        await first.close_started.wait()
+        closing.cancel()
+        first.release_close.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await closing
+
+        self.assertTrue(first.closed)
+        self.assertTrue(resolver.closed)

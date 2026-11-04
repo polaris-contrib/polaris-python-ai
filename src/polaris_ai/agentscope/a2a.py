@@ -20,6 +20,7 @@ import time
 
 from polaris.pkg.model.service import InstanceType
 
+from polaris_ai._async import await_completion
 from polaris_ai.metrics import PolarisCallReporter
 
 
@@ -100,9 +101,13 @@ class PolarisA2AAgent:
         return self._agent
 
     async def _close_agent(self):
-        if self._agent is not None:
-            agent, self._agent, self._card = self._agent, None, None
-            await agent.aclose()
+        agent = self._agent
+        if agent is None:
+            return
+        await await_completion(agent.aclose())
+        if self._agent is agent:
+            self._agent = None
+            self._card = None
 
     async def _replace_agent(self):
         await self._close_agent()
@@ -113,10 +118,11 @@ class PolarisA2AAgent:
             agent = await self._ensure_agent()
             started_at = time.monotonic()
             final_message = None
-            saw_event = False
+            saw_remote_event = False
             try:
                 async for event in agent.reply_stream(inputs, yield_final_msg=True):
-                    saw_event = True
+                    if not _is_local_reply_start_event(event):
+                        saw_remote_event = True
                     if isinstance(event, _message_type()):
                         final_message = event
                 if final_message is None:
@@ -128,7 +134,7 @@ class PolarisA2AAgent:
                     started_at, success=False,
                     timeout=isinstance(error, (asyncio.TimeoutError, TimeoutError)),
                 )
-                if saw_event or not self._is_retryable(error):
+                if saw_remote_event or not self._is_retryable(error):
                     raise
                 await self._replace_agent()
                 retry_started = time.monotonic()
@@ -200,12 +206,15 @@ class PolarisA2AAgent:
             self._resolver.invalidate(self._agent_name)
 
     async def aclose(self):
-        if self._closed:
-            return
         self._closed = True
+        await await_completion(self._close_all())
+
+    async def _close_all(self):
         async with self._lock:
-            await self._close_agent()
-            await self._resolver.async_close()
+            try:
+                await self._close_agent()
+            finally:
+                await self._resolver.async_close()
 
     async def __aenter__(self):
         self._check_open()
@@ -219,3 +228,11 @@ def _message_type():
     from agentscope.message import Msg
 
     return Msg
+
+
+def _is_local_reply_start_event(event):
+    try:
+        from agentscope.event import ReplyStartEvent
+    except ImportError:
+        return False
+    return isinstance(event, ReplyStartEvent)

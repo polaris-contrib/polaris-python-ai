@@ -477,6 +477,10 @@ class PolarisMCPClientPool:
                     pass
                 raise
 
+            if self._closed:
+                await self._close_clients(created)
+                return
+
             previous, self._clients = self._clients, next_clients
             await self._close_clients(
                 tuple(client for key, client in previous.items() if key not in next_clients)
@@ -495,13 +499,14 @@ class PolarisMCPClientPool:
     async def _close_resources(self, task):
         if task is not None:
             await task
-        if self._watch is not None:
-            watch = self._watch
-            await self.resolver.consumer.async_unwatch_service(watch)
-            if self._watch is watch:
-                self._watch = None
-        clients, self._clients = tuple(self._clients.values()), {}
-        await self._close_clients(clients)
+        async with self._lock:
+            if self._watch is not None:
+                watch = self._watch
+                await self.resolver.consumer.async_unwatch_service(watch)
+                if self._watch is watch:
+                    self._watch = None
+            clients, self._clients = tuple(self._clients.values()), {}
+            await self._close_clients(clients)
 
     def choose_client(self):
         """Return the next connected client using round-robin selection."""

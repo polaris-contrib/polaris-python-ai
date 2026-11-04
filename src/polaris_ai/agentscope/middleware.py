@@ -23,6 +23,16 @@ from agentscope.skill import SkillLoaderBase
 logger = logging.getLogger(__name__)
 
 
+class _SnapshotSkillLoader(SkillLoaderBase):
+    """Expose the middleware's last successful Skill snapshot to a Toolkit."""
+
+    def __init__(self, middleware: "PolarisDynamicSkillMiddleware"):
+        self.middleware = middleware
+
+    async def list_skills(self):
+        return list(self.middleware.last_skills)
+
+
 class PolarisDynamicSkillMiddleware(MiddlewareBase):
     """Refresh Polaris Skills before each reply while reusing one Agent.
 
@@ -36,11 +46,27 @@ class PolarisDynamicSkillMiddleware(MiddlewareBase):
             raise TypeError("loader must implement SkillLoaderBase")
         self.loader = loader
         self.last_skills = ()
+        self._snapshot_loader = _SnapshotSkillLoader(self)
 
     async def on_reply(self, agent, input_kwargs, next_handler):
         try:
             self.last_skills = tuple(await self.loader.list_skills())
         except Exception as error:
             logger.warning("Failed to refresh Polaris Skills before reply: %s", error)
+        self._sync_toolkit(agent)
         async for event in next_handler():
             yield event
+
+    def _sync_toolkit(self, agent):
+        toolkit = getattr(agent, "toolkit", None)
+        if toolkit is None:
+            return
+        for group in getattr(toolkit, "tool_groups", ()):
+            if group.name != "basic":
+                continue
+            for index, item in enumerate(group.skills_or_loaders):
+                if item is self._snapshot_loader:
+                    return
+                if item is self.loader:
+                    group.skills_or_loaders[index] = self._snapshot_loader
+                    return
