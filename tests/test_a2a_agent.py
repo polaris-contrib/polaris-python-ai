@@ -1,0 +1,257 @@
+# Tencent is pleased to support the open source community by making polaris-python-ai available.
+#
+# Copyright (C) 2026 Tencent. All rights reserved.
+#
+# Licensed under the BSD 3-Clause License (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# https://opensource.org/licenses/BSD-3-Clause
+#
+# Unless required by applicable law or agreed to in writing, software distributed
+# under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+# CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+
+import asyncio
+from unittest import IsolatedAsyncioTestCase
+
+from a2a.client.errors import A2AClientTimeoutError
+from agentscope.event import ReplyStartEvent
+from agentscope.message import Msg, TextBlock
+
+from polaris_ai.agentscope import PolarisA2AAgent
+
+
+class FakeResolver:
+    def __init__(self, cards):
+        self.cards = list(cards)
+        self.resolve_calls = 0
+        self.invalidated = []
+        self.closed = False
+
+    async def async_resolve(self, agent_name):
+        self.resolve_calls += 1
+        return self.cards.pop(0)
+
+    def invalidate(self, agent_name):
+        self.invalidated.append(agent_name)
+
+    async def async_close(self):
+        self.closed = True
+
+
+class FakeAgent:
+    def __init__(self, card, *, error=None, error_after_event=False,
+                 local_start_event=False):
+        self.card = card
+        self.error = error
+        self.error_after_event = error_after_event
+        self.local_start_event = local_start_event
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def aclose(self):
+        self.closed = True
+
+    async def reply_stream(self, inputs, *, yield_final_msg=False):
+        if self.local_start_event:
+            yield ReplyStartEvent(session_id="session", reply_id="reply", name="remote")
+        if self.error_after_event:
+            yield "event"
+        if self.error is not None:
+            raise self.error
+        yield "event"
+        yield Msg(name="assistant", role="assistant", content=[TextBlock(text="ok")])
+
+    async def reply(self, inputs):
+        return Msg(name="assistant", role="assistant", content=[TextBlock(text="replaced")])
+
+
+class BlockingAgent:
+    def __init__(self):
+        self.started = asyncio.Event()
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def aclose(self):
+        self.closed = True
+
+    async def reply_stream(self, inputs, *, yield_final_msg=False):
+        self.started.set()
+        await asyncio.sleep(30)
+        yield Msg(name="assistant", role="assistant", content=[TextBlock(text="late")])
+
+
+class BlockingCloseAgent(FakeAgent):
+    def __init__(self):
+        super().__init__("card-1")
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+
+    async def aclose(self):
+        self.close_started.set()
+        await self.release_close.wait()
+        self.closed = True
+
+
+class FakeReporter:
+    def __init__(self):
+        self.calls = []
+
+    async def report(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+class PolarisA2AAgentTests(IsolatedAsyncioTestCase):
+    async def test_first_call_resolves_once_and_network_error_rebuilds_client(self):
+        first = FakeAgent("card-1", error=OSError("connection reset"))
+        second = FakeAgent("card-2")
+        agents = [first, second]
+        resolver = FakeResolver(["card-1", "card-2"])
+        async with PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: agents.pop(0),
+        ) as agent:
+            reply = await agent.reply("hello")
+            self.assertEqual("replaced", reply.get_text_content())
+            self.assertEqual(2, resolver.resolve_calls)
+            self.assertTrue(first.closed)
+            self.assertFalse(second.closed)
+        self.assertTrue(second.closed)
+        self.assertTrue(resolver.closed)
+
+    async def test_local_reply_start_event_does_not_block_network_retry(self):
+        first = FakeAgent(
+            "card-1",
+            error=OSError("connection reset"),
+            local_start_event=True,
+        )
+        second = FakeAgent("card-2")
+        agents = [first, second]
+        resolver = FakeResolver(["card-1", "card-2"])
+        async with PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: agents.pop(0),
+        ) as agent:
+            reply = await agent.reply("hello")
+        self.assertEqual("replaced", reply.get_text_content())
+        self.assertEqual(2, resolver.resolve_calls)
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+
+    async def test_business_error_does_not_switch_instance(self):
+        first = FakeAgent("card-1", error=RuntimeError("business failure"))
+        resolver = FakeResolver(["card-1"])
+        agent = PolarisA2AAgent(resolver, "weather-agent", agent_factory=lambda card: first)
+        with self.assertRaisesRegex(RuntimeError, "business failure"):
+            await agent.reply("hello")
+        self.assertEqual(1, resolver.resolve_calls)
+        self.assertFalse(first.closed)
+        await agent.aclose()
+
+    async def test_stream_does_not_retry_after_delivering_an_event(self):
+        first = FakeAgent("card-1", error=OSError("connection reset"), error_after_event=True)
+        resolver = FakeResolver(["card-1"])
+        agent = PolarisA2AAgent(resolver, "weather-agent", agent_factory=lambda card: first)
+        events = []
+        with self.assertRaises(OSError):
+            async for event in agent.reply_stream("hello"):
+                events.append(event)
+        self.assertEqual(["event"], events)
+        self.assertEqual(1, resolver.resolve_calls)
+        await agent.aclose()
+
+    async def test_explicit_invalidation_forces_next_call_to_resolve(self):
+        first = FakeAgent("card-1")
+        second = FakeAgent("card-2")
+        agents = [first, second]
+        resolver = FakeResolver(["card-1", "card-2"])
+        agent = PolarisA2AAgent(resolver, "weather-agent", agent_factory=lambda card: agents.pop(0))
+        await agent.reply("hello")
+        await agent.invalidate()
+        self.assertTrue(first.closed)
+        self.assertEqual(["weather-agent"], resolver.invalidated)
+        await agent.reply("hello")
+        self.assertEqual(2, resolver.resolve_calls)
+        await agent.aclose()
+
+    async def test_cancellation_closes_current_client_and_resolver(self):
+        first = BlockingAgent()
+        resolver = FakeResolver(["card-1"])
+        async with PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: first,
+        ) as agent:
+            task = asyncio.create_task(agent.reply("hello"))
+            self.assertTrue(await asyncio.wait_for(first.started.wait(), 2))
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertTrue(first.closed)
+        self.assertTrue(resolver.closed)
+
+    async def test_successful_reply_reports_a2a_method_and_endpoint(self):
+        resolver = FakeResolver(["card-1"])
+        resolver.selected_endpoint = lambda name: ("10.0.0.1", 8080)
+        reporter = FakeReporter()
+        agent = PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: FakeAgent(card),
+            reporter=reporter,
+        )
+        await agent.reply("hello")
+        await agent.aclose()
+        self.assertEqual(1, len(reporter.calls))
+        self.assertEqual("message/send", reporter.calls[0]["method"])
+        self.assertEqual("a2a", reporter.calls[0]["instance_type"])
+        self.assertEqual("10.0.0.1", reporter.calls[0]["host"])
+        self.assertTrue(reporter.calls[0]["success"])
+
+    async def test_cancelled_aclose_completes_client_and_resolver_cleanup(self):
+        first = BlockingCloseAgent()
+        resolver = FakeResolver(["card-1"])
+        agent = PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: first,
+        )
+        await agent.reply("hello")
+        closing = asyncio.create_task(agent.aclose())
+        await first.close_started.wait()
+        closing.cancel()
+        first.release_close.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await closing
+
+        self.assertTrue(first.closed)
+        self.assertTrue(resolver.closed)
+
+    async def test_native_a2a_timeout_is_reported_as_timeout(self):
+        timeout = A2AClientTimeoutError("read timeout")
+        first = FakeAgent("card-1", error=timeout, local_start_event=True)
+        second = FakeAgent("card-2")
+        agents = [first, second]
+        resolver = FakeResolver(["card-1", "card-2"])
+        resolver.selected_endpoint = lambda name: ("10.0.0.1", 8080)
+        reporter = FakeReporter()
+        async with PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: agents.pop(0),
+            reporter=reporter,
+        ) as agent:
+            await agent.reply("hello")
+
+        self.assertEqual(2, len(reporter.calls))
+        self.assertFalse(reporter.calls[0]["success"])
+        self.assertTrue(reporter.calls[0]["timeout"])
+        self.assertTrue(reporter.calls[1]["success"])
