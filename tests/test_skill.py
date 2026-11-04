@@ -129,6 +129,33 @@ class SkillTests(IsolatedAsyncioTestCase):
         self.assertIsNot(active, fixed)
         self.assertEqual(["download_skill", "download_skill"], [m for m, _ in self.engine.skill_calls])
 
+    async def test_empty_version_follows_server_active_version_updates(self):
+        self.engine.downloads[("weather", "")] = SkillDownloadResponse(
+            version="v1",
+            content_type="application/zip",
+            data=skill_zip(markdown=(
+                "---\nname: weather\ndescription: version-v1\n---\nUse weather.txt.\n"
+            )),
+        )
+        loader = self.loader(names=["weather"], refresh_interval=0)
+        first = (await loader.list_skills())[0]
+        self.assertEqual("version-v1", first.description)
+
+        self.engine.downloads[("weather", "")] = SkillDownloadResponse(
+            version="v2",
+            content_type="application/zip",
+            data=skill_zip(markdown=(
+                "---\nname: weather\ndescription: version-v2\n---\nUse weather.txt.\n"
+            )),
+        )
+        second = (await loader.list_skills())[0]
+        self.assertIsNot(first, second)
+        self.assertEqual("version-v2", second.description)
+        downloads = [request for method, request in self.engine.skill_calls
+                     if method == "download_skill"]
+        self.assertEqual(2, len(downloads))
+        self.assertEqual(["", ""], [request.version for request in downloads])
+
     async def test_mounted_names_parse_first_colon_and_keep_first_version(self):
         self.engine.snapshot = snapshot(mounts=[
             ("default:weather:city", "mounted", ""),

@@ -263,9 +263,9 @@ class PolarisSkillLoader(SkillLoaderBase):
 
     async def _load_skill(self, name, version):
         self._check_open()
-        key = (name, version)
-        if key in self._cache:
-            return self._cache[key]
+        fixed_key = (name, version) if version else None
+        if fixed_key is not None and fixed_key in self._cache:
+            return self._cache[fixed_key]
         response = await self._skill_api.async_download_skill(SkillDownloadRequest(
             namespace=self.namespace, name=name, version=version, timeout=self.timeout, format="zip",
         ))
@@ -282,13 +282,23 @@ class PolarisSkillLoader(SkillLoaderBase):
             )
         if not response.data:
             raise RuntimeError(f"Failed to download skill {name!r} (empty ZIP)")
+        actual_version = response.version if isinstance(response.version, str) else ""
+        actual_version = actual_version.strip()
+        if fixed_key is not None:
+            cache_key = fixed_key
+        else:
+            cache_key = (name, actual_version) if actual_version else None
+        if cache_key is not None and cache_key in self._cache:
+            return self._cache[cache_key]
         # Extraction is isolated from the event loop and close cannot race filesystem writes.
-        return await await_completion(asyncio.to_thread(self._materialize, key, response.data))
+        return await await_completion(asyncio.to_thread(
+            self._materialize, cache_key, response.data,
+        ))
 
     def _materialize(self, key, data):
         with self._files_lock:
             self._check_open()
-            if key in self._cache:
+            if key is not None and key in self._cache:
                 return self._cache[key]
             if self._directory is None:
                 self._directory = tempfile.TemporaryDirectory(prefix="polaris-ai-skills-")
@@ -305,7 +315,8 @@ class PolarisSkillLoader(SkillLoaderBase):
                     name=str(name), description=str(description), dir=str(root),
                     markdown=content.content, updated_at=markdown_path.stat().st_mtime,
                 )
-                self._cache[key] = skill
+                if key is not None:
+                    self._cache[key] = skill
                 return skill
             except BaseException:
                 shutil.rmtree(directory)

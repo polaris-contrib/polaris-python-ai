@@ -20,6 +20,7 @@ import pytest
 
 pytest.importorskip("agentscope.middleware")
 
+from agentscope.skill import Skill, SkillLoaderBase
 from agentscope.tool import Toolkit
 from polaris.pkg.model.skill import (
     SkillDownloadResponse,
@@ -33,6 +34,42 @@ from tests._support import FakeContext, FakeEngine, skill_zip
 
 
 class DynamicSkillMiddlewareTests(IsolatedAsyncioTestCase):
+    async def test_multiple_middlewares_share_one_toolkit_snapshot(self):
+        class FixedLoader(SkillLoaderBase):
+            def __init__(self):
+                self.skills = []
+
+            async def list_skills(self):
+                return list(self.skills)
+
+        def skill(description):
+            return Skill(
+                name="weather",
+                description=description,
+                dir=f"/tmp/{description}",
+                markdown=description,
+                updated_at=0,
+            )
+
+        loader = FixedLoader()
+        toolkit = Toolkit(skills_or_loaders=[loader])
+        first = PolarisDynamicSkillMiddleware(loader)
+        second = PolarisDynamicSkillMiddleware(loader)
+
+        async def next_handler():
+            yield "reply"
+
+        agent = SimpleNamespace(toolkit=toolkit)
+        loader.skills = [skill("version-v1")]
+        [event async for event in first.on_reply(agent, {}, next_handler)]
+        self.assertIn("version-v1", await toolkit.get_skill_instructions())
+
+        loader.skills = [skill("version-v2")]
+        [event async for event in second.on_reply(agent, {}, next_handler)]
+        prompt = await toolkit.get_skill_instructions()
+        self.assertIn("version-v2", prompt)
+        self.assertNotIn("version-v1", prompt)
+
     async def test_refreshes_skills_before_reply(self):
         engine = FakeEngine()
         context = FakeContext(engine)

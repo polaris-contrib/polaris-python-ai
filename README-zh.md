@@ -79,8 +79,11 @@ asyncio.run(main())
 挂载名称 `namespace:skillName` 按第一个冒号切分，其他命名空间跳过，重复名称保留第一条。
 版本优先级为挂载版本、构造时指定的 `version`、服务端 active 版本。
 
-成功下载按名称和请求版本缓存；失败不会缓存。列表失败直接抛错，单个下载失败会记录日志并跳过，
-下次重试。空的已发布列表缓存 30 秒，空挂载表下次重新查询。
+显式版本下载成功后按名称和版本缓存；空版本表示服务端 active 版本，会重新验证，并按服务端
+返回的实际版本物化缓存。共享同一个 loader 的多个动态刷新中间件共享一份 Toolkit 快照，
+同一 Runtime 创建的多个 Agent 都会看到最新成功刷新。
+失败不会缓存。列表失败直接抛错，单个下载失败会记录日志并跳过，下次重试。空的已发布列表缓存
+30 秒，空挂载表下次重新查询。
 `async_list_skill_names()` 只刷新引用列表，不下载 ZIP；挂载模式的
 `async_skill_exists()` 只检查挂载表。服务端返回 `400202` 时抛
 `PolarisSkillNotFoundError`。loader 暴露 `source`、`location`、
@@ -149,7 +152,7 @@ Resolver 读取标准 MCP 实例 metadata、校验协议、构造 AgentScope `Ht
 并把契约中禁用的 Tool 写入 `MCPClient.disable_tools`。Streamable HTTP 使用无状态
 客户端，SSE 使用有状态连接。连接池通过 watch 感知实例增删并同步重建客户端。
 MCP Tool 调用自动以原 Tool 名作为 method、`instance_type="mcp"` 上报；A2A 回复自动以
-`message/send` 和 `instance_type="a2a"` 上报。
+`message/send` 和 `instance_type="a2a"` 上报，官方 A2A 超时异常会按 timeout 上报。
 
 `build_agent_card()` 与 `PolarisAgentCardTemplate` 可构造原生 A2A 卡片，支持协议、
 Skill、流式能力和输入输出模式。

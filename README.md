@@ -91,7 +91,11 @@ ZIPs include `SKILL.md` and assets. Both flat archives and a single skill folder
 are accepted; traversal, absolute paths, links, conflicting entries and multiple
 skill roots are rejected. Maximum archive/expanded size is 64 MiB and the entry
 limit is 2048. Skills live in temporary directories until the loader closes.
-Successful loads are cached by requested name/version; failures are retried.
+Successful loads with an explicit version are cached by name/version. A blank
+version is an active-version alias: it is revalidated and materialized under
+the server-returned version. Middleware instances sharing one loader also
+share one Toolkit snapshot, so agents created from the same runtime see the
+latest successful refresh.
 Persistent offline fallback is provided by the SDK, not a second adapter cache.
 Published list errors propagate; an individual failed download is logged and
 skipped. Empty mount tables are re-read on the next call.
@@ -169,7 +173,7 @@ an AgentScope `HttpMCPConfig`, and maps disabled contract Tools to
 stateful client. The pool watches Polaris changes and reconciles clients.
 MCP Tool calls automatically report the original Tool name as method and
 `instance_type="mcp"`. A2A replies report `message/send` with
-`instance_type="a2a"`.
+`instance_type="a2a"`; native A2A timeout errors are reported as timeouts.
 
 `build_agent_card()` and `PolarisAgentCardTemplate` construct native A2A cards
 with protocol, Skills, streaming capability, and input/output modes.

@@ -77,8 +77,18 @@ class PolarisA2AAgent:
             raise RuntimeError("Polaris A2A agent is closed")
 
     @staticmethod
+    def _is_timeout(error: BaseException) -> bool:
+        if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+            return True
+        try:
+            from a2a.client.errors import A2AClientTimeoutError
+        except ImportError:
+            return False
+        return isinstance(error, A2AClientTimeoutError)
+
+    @staticmethod
     def _is_retryable(error: BaseException) -> bool:
-        if isinstance(error, (asyncio.TimeoutError, TimeoutError, OSError)):
+        if PolarisA2AAgent._is_timeout(error) or isinstance(error, OSError):
             return True
         try:
             from a2a.client.errors import A2AClientTimeoutError
@@ -132,7 +142,7 @@ class PolarisA2AAgent:
             except BaseException as error:
                 await self._report_call(
                     started_at, success=False,
-                    timeout=isinstance(error, (asyncio.TimeoutError, TimeoutError)),
+                    timeout=self._is_timeout(error),
                 )
                 if saw_remote_event or not self._is_retryable(error):
                     raise
@@ -143,7 +153,7 @@ class PolarisA2AAgent:
                 except BaseException as retry_error:
                     await self._report_call(
                         retry_started, success=False,
-                        timeout=isinstance(retry_error, (asyncio.TimeoutError, TimeoutError)),
+                        timeout=self._is_timeout(retry_error),
                     )
                     raise
                 await self._report_call(retry_started, success=True)
@@ -163,7 +173,7 @@ class PolarisA2AAgent:
             except BaseException as error:
                 await self._report_call(
                     started_at, success=False,
-                    timeout=isinstance(error, (asyncio.TimeoutError, TimeoutError)),
+                    timeout=self._is_timeout(error),
                 )
                 if yielded or not self._is_retryable(error):
                     raise

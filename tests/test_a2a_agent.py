@@ -16,6 +16,7 @@
 import asyncio
 from unittest import IsolatedAsyncioTestCase
 
+from a2a.client.errors import A2AClientTimeoutError
 from agentscope.event import ReplyStartEvent
 from agentscope.message import Msg, TextBlock
 
@@ -233,3 +234,24 @@ class PolarisA2AAgentTests(IsolatedAsyncioTestCase):
 
         self.assertTrue(first.closed)
         self.assertTrue(resolver.closed)
+
+    async def test_native_a2a_timeout_is_reported_as_timeout(self):
+        timeout = A2AClientTimeoutError("read timeout")
+        first = FakeAgent("card-1", error=timeout, local_start_event=True)
+        second = FakeAgent("card-2")
+        agents = [first, second]
+        resolver = FakeResolver(["card-1", "card-2"])
+        resolver.selected_endpoint = lambda name: ("10.0.0.1", 8080)
+        reporter = FakeReporter()
+        async with PolarisA2AAgent(
+            resolver,
+            "weather-agent",
+            agent_factory=lambda card: agents.pop(0),
+            reporter=reporter,
+        ) as agent:
+            await agent.reply("hello")
+
+        self.assertEqual(2, len(reporter.calls))
+        self.assertFalse(reporter.calls[0]["success"])
+        self.assertTrue(reporter.calls[0]["timeout"])
+        self.assertTrue(reporter.calls[1]["success"])
