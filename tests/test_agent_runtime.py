@@ -27,6 +27,7 @@ from polaris_ai.agentscope.config import (
     PolarisSkillConfig,
 )
 from polaris_ai.agentscope.middleware import PolarisDynamicSkillMiddleware
+from polaris_ai.log import PolarisAILogOptions
 from tests._support import FakeContext, FakeEngine
 
 
@@ -46,6 +47,29 @@ def test_runtime_composes_skill_loader_and_borrowed_context_is_not_destroyed():
     runtime.close()
     runtime.close()
     assert not context.is_destroy()
+
+
+def test_runtime_owns_ai_loggers_and_closes_them(tmp_path):
+    context = FakeContext(FakeEngine())
+    config = PolarisAgentConfig(a2a=PolarisA2AConfig(enabled=False))
+    runtime = PolarisAgentRuntime(
+        config,
+        sdk_context=context,
+        ai_log_options=PolarisAILogOptions(log_dir=tmp_path, max_age_days=0),
+    )
+    assert runtime.ai_logger is not None
+    assert runtime.skill_loader.logger._manager is runtime.ai_logger
+    path = tmp_path / "base" / "polaris-ai-base-fake-client.log"
+    assert path.is_file()
+    runtime.close()
+    assert "Initialized Polaris AI runtime" in path.read_text(encoding="utf-8")
+
+    replacement = PolarisAgentRuntime(
+        config,
+        sdk_context=context,
+        ai_log_options=PolarisAILogOptions(log_dir=tmp_path, max_age_days=0),
+    )
+    replacement.close()
 
 
 def test_runtime_closes_owned_context_and_adapter_resources():

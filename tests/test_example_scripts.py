@@ -42,6 +42,7 @@ def example_tree(tmp_path, monkeypatch):
         "agentscope/a2a",
         "agentscope/a2a/skill",
         "agentscope/mcp",
+        "agentscope/runtime",
     ):
         (root / name).mkdir(parents=True)
     monkeypatch.setattr(manager, "EXAMPLES", root)
@@ -82,6 +83,7 @@ def test_group_selection_accepts_nested_names_and_rejects_unknown():
         "agentscope/a2a/skill",
     ]
     assert manager.verification_targets("agentscope", "mcp") == ["agentscope/mcp"]
+    assert manager.verification_targets("agentscope", "runtime") == ["agentscope/runtime"]
     assert manager.verification_targets("agentscope/a2a", "skill") == ["agentscope/a2a/skill"]
     assert manager.verification_targets("", "agentscope/a2a/provider") == [
         "agentscope/a2a/provider"

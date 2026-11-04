@@ -23,6 +23,7 @@ from polaris_ai.agentscope.config import PolarisAgentConfig
 from polaris_ai.agentscope.context import PolarisAgentContext
 from polaris_ai.agentscope.middleware import PolarisDynamicSkillMiddleware
 from polaris_ai.agentscope.skill import PolarisSkillLoader
+from polaris_ai.log import PolarisAILogOptions, configure_ai_logging
 
 
 class PolarisAgentRuntime:
@@ -34,20 +35,15 @@ class PolarisAgentRuntime:
         *,
         sdk_context=None,
         log_options: LogOptions | None = None,
+        ai_log_options: PolarisAILogOptions | None = None,
     ):
         if not isinstance(config, PolarisAgentConfig):
             raise TypeError("config must be a PolarisAgentConfig")
         if not config.enabled:
             raise ValueError("Polaris AgentScope integration is disabled")
         self.config = config
-        self.context = PolarisAgentContext(
-            config.namespace,
-            address=config.addresses,
-            connector_token=config.connector_token,
-            skill_address=config.skill.addresses,
-            log_options=log_options,
-            sdk_context=sdk_context,
-        )
+        self.context = None
+        self.ai_logger = None
         self.skill_loader: PolarisSkillLoader | None = None
         self.resolver: PolarisA2AResolver | None = None
         self.registrar: PolarisA2ARegistrar | None = None
@@ -55,6 +51,21 @@ class PolarisAgentRuntime:
         self._skill_toolkit = None
         self._closed = False
         try:
+            self.context = PolarisAgentContext(
+                config.namespace,
+                address=config.addresses,
+                connector_token=config.connector_token,
+                skill_address=config.skill.addresses,
+                log_options=log_options,
+                sdk_context=sdk_context,
+            )
+            if ai_log_options is not None:
+                client_id_getter = getattr(self.context.context, "get_client_id", None)
+                client_id = (
+                    client_id_getter() if callable(client_id_getter)
+                    else f"runtime-{id(self.context.context)}"
+                )
+                self.ai_logger = configure_ai_logging(client_id, ai_log_options)
             if config.skill.enabled:
                 self.skill_loader = PolarisSkillLoader(
                     self.context.context,
@@ -67,15 +78,20 @@ class PolarisAgentRuntime:
                     list_limit=config.skill.list_limit,
                     max_skills=config.skill.max_skills,
                     refresh_interval=config.skill.refresh_interval,
+                    logger=self._category_logger("skill"),
                 )
             if config.a2a.enabled and config.a2a.discovery.enabled:
-                self.resolver = PolarisA2AResolver(self.context.context, config.namespace)
+                self.resolver = PolarisA2AResolver(
+                    self.context.context, config.namespace,
+                    logger=self._category_logger("a2a"),
+                )
             if config.a2a.enabled and config.a2a.registry.enabled:
                 self.registrar = PolarisA2ARegistrar(
                     self.context.context,
                     config.namespace,
                     service_token=config.service_token,
                     ttl=config.a2a.registry.ttl,
+                    logger=self._category_logger("a2a"),
                 )
             if config.mcp.enabled:
                 from polaris_ai.agentscope.mcp import PolarisMCPResolver
@@ -90,10 +106,38 @@ class PolarisAgentRuntime:
                     timeout=config.mcp.timeout,
                     filter_contract=config.mcp.filter_contract,
                     headers=dict(config.mcp.headers),
+                    logger=self._category_logger("mcp"),
+                    metrics_logger=self._category_logger("metrics"),
+                )
+            if self.ai_logger is not None:
+                self.ai_logger.get_logger("base").info(
+                    "Initialized Polaris AI runtime: namespace=%s skill=%s "
+                    "a2aRegistry=%s a2aDiscovery=%s mcp=%s",
+                    config.namespace, config.skill.enabled,
+                    config.a2a.enabled and config.a2a.registry.enabled,
+                    config.a2a.enabled and config.a2a.discovery.enabled,
+                    config.mcp.enabled,
+                )
+                self.ai_logger.get_logger("base").debug(
+                    "Polaris AI runtime settings: addresses=%s skillMounted=%s "
+                    "skillNames=%d mcpScheme=%s",
+                    config.addresses, config.skill.mounted_enabled,
+                    len(config.skill.names), config.mcp.scheme or "<instance>",
                 )
         except BaseException:
             self.close()
             raise
+
+    def _category_logger(self, category):
+        return self.ai_logger.get_logger(category) if self.ai_logger is not None else None
+
+    def _log_close_start(self):
+        ai_logger = getattr(self, "ai_logger", None)
+        if ai_logger is None:
+            return
+        ai_logger.get_logger("base").info(
+            "Closing Polaris AI runtime: namespace=%s", self.config.namespace,
+        )
 
     @property
     def provider(self):
@@ -142,7 +186,10 @@ class PolarisAgentRuntime:
                 selected_toolkit = self.skill_toolkit
             else:
                 self._attach_skill_loader(selected_toolkit)
-            selected_middlewares.append(PolarisDynamicSkillMiddleware(self.skill_loader))
+            selected_middlewares.append(PolarisDynamicSkillMiddleware(
+                self.skill_loader,
+                logger=self._category_logger("agentscope"),
+            ))
         return Agent(
             name=name,
             system_prompt=system_prompt,
@@ -176,19 +223,37 @@ class PolarisAgentRuntime:
         try:
             await self._close_adapters()
         finally:
-            await self.context.async_close()
+            try:
+                context = getattr(self, "context", None)
+                if context is not None:
+                    await context.async_close()
+            finally:
+                ai_logger = getattr(self, "ai_logger", None)
+                if ai_logger is not None:
+                    await ai_logger.async_close()
 
     def close(self):
         """Close adapters, then the shared context only if this runtime owns it."""
         if getattr(self, "_closed", True):
             return
+        self._log_close_start()
         self._closed = True
-        self._close_adapters_sync()
-        self.context.close()
+        try:
+            self._close_adapters_sync()
+        finally:
+            try:
+                context = getattr(self, "context", None)
+                if context is not None:
+                    context.close()
+            finally:
+                ai_logger = getattr(self, "ai_logger", None)
+                if ai_logger is not None:
+                    ai_logger.close()
 
     async def async_close(self):
         if getattr(self, "_closed", True):
             return
+        self._log_close_start()
         self._closed = True
         await await_completion(self._close_all_async())
 

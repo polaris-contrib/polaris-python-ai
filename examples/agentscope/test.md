@@ -17,7 +17,7 @@
 
 ## 离线验证
 
-一次运行 A2A、已发布 Skill 和挂载 Skill 三个独立子进程。
+分组验证包含 A2A、已发布 Skill、挂载 Skill、MCP 和 PolarisAgentRuntime 独立场景。
 
 只替换 Polaris 的 protobuf gRPC 调用边界，SDK Context、插件、自动心跳、
 缓存、日志和 AgentScope 都使用真实实现。A2A HTTP 服务使用本机动态端口，
@@ -67,6 +67,7 @@ POLARIS_EVENT_REPORTER_* 配置在示例公共入口应用，事件上报错误�
 - verification.log：验证输出、异常和 traceback。
 - result.json：exit_code、timed_out、interrupted 和 action。
 - polaris/log/：按 provider、consumer、probe 等组件隔离的 SDK 分类日志。
+- polaris/log/ai/：base、agentscope、skill、a2a、mcp、metrics 分类的 AI 扩展日志。
 - polaris/backup/：当前运行的实例缓存与 Skill 备份。
 - work/：运行工作目录，与源码目录隔离。
 

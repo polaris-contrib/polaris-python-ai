@@ -25,7 +25,7 @@ import uvicorn
 from a2a.types import AgentSkill
 
 from examples._internal._runtime import get_local_host
-from examples.agentscope._common import context, parser
+from examples.agentscope._common import ai_logging, context, parser
 from examples.agentscope.a2a.provider.server import create_server
 from examples.agentscope.a2a.provider.skill_agent import create_skill_agent
 from polaris_ai.agentscope import (
@@ -94,30 +94,34 @@ async def main(argv=None):
         port = listener.getsockname()[1]
         endpoint_host = f"[{args.host}]" if ":" in args.host else args.host
         sdk = context(args, entry=__file__)
-        async with skill_agent() as (agent, skills):
-            app, card = create_server(
-                args.service, f"http://{endpoint_host}:{port}/", agent=agent, skills=skills
-            )
-            server = uvicorn.Server(uvicorn.Config(app, log_level="info"))
-            serving = asyncio.create_task(server.serve(sockets=[listener]))
-            async with asyncio.timeout(10):
-                while not server.started:
-                    if serving.done():
-                        await serving
-                        raise RuntimeError("A2A server stopped before startup")
-                    await asyncio.sleep(0.01)
-            async with PolarisA2AServerRegistration(
-                PolarisA2ARegistrar(
-                    sdk,
-                    args.namespace,
-                    service_token=args.service_token,
-                    ttl=args.ttl,
-                ),
-                card,
-                [A2ATransport(args.host, port)],
-            ):
-                print(f"Registered {args.namespace}/{args.service} at {args.host}:{port}", flush=True)
-                await asyncio.shield(serving)
+        async with ai_logging(sdk, entry=__file__):
+            async with skill_agent() as (agent, skills):
+                app, card = create_server(
+                    args.service, f"http://{endpoint_host}:{port}/", agent=agent, skills=skills
+                )
+                server = uvicorn.Server(uvicorn.Config(app, log_level="info"))
+                serving = asyncio.create_task(server.serve(sockets=[listener]))
+                async with asyncio.timeout(10):
+                    while not server.started:
+                        if serving.done():
+                            await serving
+                            raise RuntimeError("A2A server stopped before startup")
+                        await asyncio.sleep(0.01)
+                async with PolarisA2AServerRegistration(
+                    PolarisA2ARegistrar(
+                        sdk,
+                        args.namespace,
+                        service_token=args.service_token,
+                        ttl=args.ttl,
+                    ),
+                    card,
+                    [A2ATransport(args.host, port)],
+                ):
+                    print(
+                        f"Registered {args.namespace}/{args.service} at {args.host}:{port}",
+                        flush=True,
+                    )
+                    await asyncio.shield(serving)
     finally:
         try:
             if serving is not None:

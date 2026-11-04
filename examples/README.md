@@ -9,6 +9,7 @@ uv pip install -e '.[agentscope,a2a]' --group dev
 ./examples/verify.sh --only agentscope/skill
 ./examples/verify.sh --only agentscope/a2a/skill
 ./examples/verify.sh --only agentscope/mcp
+./examples/verify.sh --only agentscope/runtime
 ```
 
 The scripts select `POLARIS_PYTHON`, then the project's `.venv/bin/python`,
@@ -32,7 +33,8 @@ export POLARIS_AGENT_SERVICE=<service-with-mounted-skills>
 The namespace defaults to `python-agentscope-e2e`; `default` is rejected. Skill
 fixtures must already exist; these scripts do not publish Skills. A2A test
 instances are deregistered before exit. Each scenario retains console output,
-assertions, results, SDK logs and backups beneath its own `.logs/` directory.
+assertions, results, SDK logs, `polaris/log/ai/` category logs and backups
+beneath its own `.logs/` directory.
 
 ```bash
 ./examples/logs.sh --latest --tail 50

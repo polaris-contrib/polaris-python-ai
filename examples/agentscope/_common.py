@@ -17,6 +17,7 @@
 
 import argparse
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from polaris.api.config import init_context_by_config
@@ -26,7 +27,9 @@ from examples._internal._runtime import (
     configure_e2e_event_reporting,
     demo_backup_directory,
     demo_log_options,
+    demo_polaris_directory,
 )
+from polaris_ai import PolarisAILogOptions, configure_ai_logging, use_ai_logger
 
 
 def parser(description):
@@ -66,3 +69,28 @@ def context(args, *, entry=None, component=None):
     config.get_consumer().get_local_cache().persist_dir = str(root / "instances")
     config.get_ai().get_skill().get_server_connector().persist_dir = str(root / "skills")
     return init_context_by_config(config, log_options=demo_log_options(entry, component=component))
+
+
+@asynccontextmanager
+async def ai_logging(sdk, *, entry=None):
+    """Bind detailed AI extension logs to the current retained example run."""
+    manager = ai_log_manager(sdk, entry=entry)
+    try:
+        with use_ai_logger(manager):
+            yield manager
+    finally:
+        await manager.async_close()
+
+
+def ai_log_manager(sdk, *, entry=None):
+    """Create the managed AI logger used by one retained example process."""
+    return configure_ai_logging(sdk.get_client_id(), ai_log_options(entry))
+
+
+def ai_log_options(entry=None):
+    """Return detailed managed logging options for an example process."""
+    entry = entry or __file__
+    return PolarisAILogOptions(
+        level=os.getenv("POLARIS_AI_LOG_LEVEL", "debug"),
+        log_dir=demo_polaris_directory(entry) / "log" / "ai",
+    )

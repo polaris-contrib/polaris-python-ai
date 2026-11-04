@@ -51,12 +51,14 @@ VERIFIERS = {
     "agentscope/skill/published": ("_internal/_verify.py", ["--demo", "published"]),
     "agentscope/skill/mounted": ("_internal/_verify.py", ["--demo", "mounted"]),
     "agentscope/mcp": ("_internal/_verify.py", ["--demo", "mcp"]),
+    "agentscope/runtime": ("_internal/_verify.py", ["--demo", "runtime"]),
 }
 GROUPS = {
     "": [
         "agentscope/a2a",
         "agentscope/a2a/skill",
         "agentscope/mcp",
+        "agentscope/runtime",
         "agentscope/skill/published",
         "agentscope/skill/mounted",
     ],
@@ -64,6 +66,7 @@ GROUPS = {
         "agentscope/a2a",
         "agentscope/a2a/skill",
         "agentscope/mcp",
+        "agentscope/runtime",
         "agentscope/skill/published",
         "agentscope/skill/mounted",
     ],
@@ -132,6 +135,7 @@ def run_process(directory, entry, arguments, action, timeout):
     print(f"{action.upper()} {directory.relative_to(EXAMPLES) or '.'}", flush=True)
     print(f"Run: {run}", flush=True)
     print(f"Logs: {run / 'polaris' / 'log'}", flush=True)
+    print(f"AI logs: {run / 'polaris' / 'log' / 'ai'}", flush=True)
     print(f"Backups: {run / 'polaris' / 'backup'}", flush=True)
     command = [sys.executable, str(entry), *arguments]
     if action == "run":

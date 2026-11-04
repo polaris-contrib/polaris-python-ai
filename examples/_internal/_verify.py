@@ -44,6 +44,7 @@ from examples.agentscope import _common
 from examples.agentscope.a2a.consumer import main as consumer_demo
 from examples.agentscope.a2a.provider import main as provider_demo
 from examples.agentscope.mcp import main as mcp_demo
+from examples.agentscope.runtime import main as runtime_demo
 from examples.agentscope.skill.mounted import main as mounted_demo
 from examples.agentscope.skill.published import main as published_demo
 from polaris_ai.agentscope import PolarisSkillLoader
@@ -59,7 +60,7 @@ def required_environment(demo):
     token = os.getenv("POLARIS_E2E_SERVICE_TOKEN") or os.getenv("POLARIS_SERVICE_TOKEN", "")
     if demo in ("a2a", "skill-a2a") and not token:
         raise ValueError("POLARIS_SERVICE_TOKEN or POLARIS_E2E_SERVICE_TOKEN is required")
-    if demo in ("published", "skill-a2a") and not os.getenv("POLARIS_SKILL_NAME"):
+    if demo in ("published", "skill-a2a", "runtime") and not os.getenv("POLARIS_SKILL_NAME"):
         raise ValueError("POLARIS_SKILL_NAME must identify a published Skill")
     if demo == "mounted" and not os.getenv("POLARIS_AGENT_SERVICE"):
         raise ValueError("POLARIS_AGENT_SERVICE must identify a service with mounted Skills")
@@ -96,6 +97,19 @@ def sdk_arguments(address, namespace):
     if os.getenv("POLARIS_DEMO_OFFLINE") != "1" and (configured := os.getenv("POLARIS_E2E_CONFIG")):
         arguments += ["--config", configured]
     return arguments
+
+
+def assert_ai_logs(*categories):
+    run = Path(os.environ["POLARIS_DEMO_RUN_DIR"])
+    root = run / "polaris" / "log" / "ai"
+    files = {}
+    for category in categories:
+        category_files = sorted(
+            path for path in (root / category).glob("polaris-ai-*.log") if path.is_file()
+        )
+        assert category_files, f"No AI {category} log under {root}"
+        files[category] = [str(path.relative_to(run)) for path in category_files]
+    return files
 
 
 async def eventually(callback, *, timeout=20, task=None):
@@ -303,6 +317,7 @@ async def verify_skills(demo, address, namespace, stub):
         await mounted_demo.main([*demo_args, "--service", service])
     previous_downloads = stub.count("download_skill") if stub is not None else 0
     sdk = _common.context(_common.parser("Probe").parse_args(args), component="probe")
+    log_manager = _common.ai_log_manager(sdk, entry=__file__)
     directories = []
     try:
         if stub is not None and demo == "published":
@@ -315,6 +330,7 @@ async def verify_skills(demo, address, namespace, stub):
             version=version,
             list_limit=1,
             timeout=5000,
+            logger=log_manager.get_logger("skill"),
         ) as loader:
             toolkit = Toolkit(skills_or_loaders=[loader])
             instructions = await toolkit.get_skill_instructions()
@@ -355,7 +371,10 @@ async def verify_skills(demo, address, namespace, stub):
         assert all(not directory.exists() for directory in directories)
         assert not sdk.is_destroy(), "Loader destroyed a borrowed SDKContext"
     finally:
-        await asyncio.to_thread(sdk.destroy)
+        try:
+            await log_manager.async_close()
+        finally:
+            await asyncio.to_thread(sdk.destroy)
     return {
         "skills": [skill.name for skill in skills],
         "temporary_assets_removed": True,
@@ -387,6 +406,19 @@ async def verify_mcp(address, namespace, stub):
     }
 
 
+async def verify_runtime(address, namespace, stub):
+    arguments = [*sdk_arguments(address, namespace), "--load-skills"]
+    skill_name = os.getenv("POLARIS_SKILL_NAME") if stub is None else "weather"
+    if skill_name:
+        arguments += ["--skill-name", skill_name]
+    result = await runtime_demo.main(arguments)
+    assert result["borrowed_context"]
+    assert result["a2a_resolver"] and result["a2a_registrar"]
+    assert result["mcp_resolver"] is False
+    assert skill_name in result["skill_names"]
+    return result
+
+
 async def verify(demo, real):
     namespace = e2e_namespace()
     stub = None if real else RegistryStub(namespace)
@@ -411,6 +443,8 @@ async def verify(demo, real):
                 if demo == "skill-a2a"
                 else await verify_mcp(address, namespace, stub)
                 if demo == "mcp"
+                else await verify_runtime(address, namespace, stub)
+                if demo == "runtime"
                 else await verify_skills(demo, address, namespace, stub)
             )
         finally:
@@ -422,11 +456,21 @@ async def verify(demo, real):
             if flow is not None:
                 assert not flow.persistence.write_thread.is_alive()
         assert len({sdk.get_client_id() for sdk in contexts}) == len(contexts)
+    expected_ai_categories = {
+        "a2a": ("a2a",),
+        "skill-a2a": ("a2a", "agentscope", "skill"),
+        "mcp": ("mcp",),
+        "published": ("skill",),
+        "mounted": ("skill",),
+        "runtime": ("base", "skill", "a2a"),
+    }[demo]
+    ai_logs = assert_ai_logs(*expected_ai_categories)
     result.update(
         demo=demo,
         mode="real" if real else "offline",
         namespace=namespace,
         contexts_stopped=len(contexts),
+        ai_logs=ai_logs,
     )
     print(json.dumps(result), flush=True)
 
@@ -434,7 +478,9 @@ async def verify(demo, real):
 def main():
     arguments = argparse.ArgumentParser(description=__doc__)
     arguments.add_argument(
-        "--demo", choices=("a2a", "skill-a2a", "mcp", "published", "mounted"), required=True
+        "--demo",
+        choices=("a2a", "skill-a2a", "mcp", "published", "mounted", "runtime"),
+        required=True,
     )
     arguments.add_argument("--real", action="store_true")
     args = arguments.parse_args()

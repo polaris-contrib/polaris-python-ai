@@ -36,6 +36,8 @@ __all__ = [
     "RegisteredInstance",
     "PolarisSkillNotFoundError",
     "PolarisSkillRepositoryInfo",
+    "PolarisAILogOptions",
+    "PolarisAILogger",
 ]
 
 
@@ -62,6 +64,8 @@ def __getattr__(name: str):
         module = "polaris_ai.a2a.server"
     elif name in ("PolarisSkillNotFoundError", "PolarisSkillRepositoryInfo"):
         module = ".skill"
+    elif name in ("PolarisAILogOptions", "PolarisAILogger"):
+        module = "polaris_ai.log"
     else:
         module = "polaris_ai.a2a"
     value = getattr(import_module(module, __name__), name)

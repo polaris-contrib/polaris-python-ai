@@ -15,4 +15,20 @@
 
 """Polaris extensions for Python AI frameworks."""
 
+from .log import (
+    PolarisAILogger,
+    PolarisAILogOptions,
+    configure_ai_logging,
+    get_ai_logger,
+    use_ai_logger,
+)
+
 __version__ = "0.1.0"
+
+__all__ = [
+    "PolarisAILogOptions",
+    "PolarisAILogger",
+    "configure_ai_logging",
+    "get_ai_logger",
+    "use_ai_logger",
+]

@@ -16,6 +16,9 @@ it, and invoke two turns.
 `--connect` to the MCP example to run a real AgentScope MCP handshake and
 `tools/list` against an available server.
 
+`agentscope/runtime` composes Skill, A2A, optional MCP and AI category logging
+through `PolarisAgentConfig` and `PolarisAgentRuntime`.
+
 ## Published Skills
 
 ```bash

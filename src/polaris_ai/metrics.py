@@ -15,7 +15,6 @@
 
 """Framework-independent call result reporting for AI adapters."""
 
-import logging
 import time
 
 from polaris.pkg.model.service import (
@@ -24,7 +23,7 @@ from polaris.pkg.model.service import (
     ServiceInfo,
 )
 
-logger = logging.getLogger(__name__)
+from polaris_ai.log import get_ai_logger
 
 
 class PolarisCallReporter:
@@ -38,6 +37,7 @@ class PolarisCallReporter:
         caller_service: str = "",
         labels: str = "",
         caller_ip: str = "",
+        logger=None,
     ):
         if consumer is None:
             raise ValueError("A ConsumerAPI is required")
@@ -46,6 +46,7 @@ class PolarisCallReporter:
         self.caller_service = caller_service.strip()
         self.labels = labels
         self.caller_ip = caller_ip
+        self.logger = logger if logger is not None else get_ai_logger("metrics")
 
     async def report(
         self,
@@ -85,4 +86,7 @@ class PolarisCallReporter:
         try:
             await self.consumer.async_update_service_call_result(result)
         except Exception as error:
-            logger.warning("Failed to report %s call for %s: %s", instance_type, service, error)
+            self.logger.warning_throttled(
+                ("report", instance_type, service),
+                "Failed to report %s call for %s: %s", instance_type, service, error,
+            )

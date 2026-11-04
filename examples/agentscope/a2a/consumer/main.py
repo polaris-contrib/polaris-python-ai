@@ -19,7 +19,7 @@ import asyncio
 
 from agentscope.message import UserMsg
 
-from examples.agentscope._common import context, parser
+from examples.agentscope._common import ai_logging, context, parser
 from polaris_ai.agentscope import PolarisA2AAgent, PolarisA2AResolver
 
 
@@ -31,15 +31,16 @@ async def main(argv=None):
     sdk = context(args, entry=__file__)
     messages = args.message or ["Hello Polaris"]
     try:
-        resolver = PolarisA2AResolver(sdk, args.namespace)
-        async with PolarisA2AAgent(resolver, args.service) as agent:
-            replies = []
-            for message in messages:
-                reply = await agent.reply(UserMsg(name="user", content=message))
-                text = reply.get_text_content()
-                print(text)
-                replies.append(text)
-            return replies[0] if len(replies) == 1 else replies
+        async with ai_logging(sdk, entry=__file__):
+            resolver = PolarisA2AResolver(sdk, args.namespace)
+            async with PolarisA2AAgent(resolver, args.service) as agent:
+                replies = []
+                for message in messages:
+                    reply = await agent.reply(UserMsg(name="user", content=message))
+                    text = reply.get_text_content()
+                    print(text)
+                    replies.append(text)
+                return replies[0] if len(replies) == 1 else replies
     finally:
         await asyncio.to_thread(sdk.destroy)
 

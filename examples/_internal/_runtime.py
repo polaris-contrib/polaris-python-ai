@@ -199,4 +199,5 @@ def verification_directory(entry):
             else:
                 os.environ[name] = value
         print(f"Logs: {run / 'polaris' / 'log'}", file=sys.stderr)
+        print(f"AI logs: {run / 'polaris' / 'log' / 'ai'}", file=sys.stderr)
         print(f"Backups: {run / 'polaris' / 'backup'}", file=sys.stderr)

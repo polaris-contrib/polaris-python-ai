@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 import time
 import types
@@ -42,9 +41,8 @@ from polaris.pkg.model.contract import (
 from polaris.pkg.model.service import GetHealthyInstancesRequest, GetInstancesRequest, InstanceType
 
 from polaris_ai._async import await_completion
+from polaris_ai.log import get_ai_logger
 from polaris_ai.metrics import PolarisCallReporter
-
-logger = logging.getLogger(__name__)
 
 MCP_STREAMABLE_HTTP = "mcp-streamable-http"
 MCP_SSE = "mcp-sse"
@@ -196,6 +194,8 @@ class PolarisMCPResolver:
         timeout: float = 30.0,
         filter_contract: bool = True,
         headers: dict[str, str] | None = None,
+        logger=None,
+        metrics_logger=None,
     ):
         if sdk_context is None or sdk_context.is_destroy():
             raise ValueError("An active SDKContext is required")
@@ -209,10 +209,19 @@ class PolarisMCPResolver:
         self.timeout = timeout
         self.filter_contract = filter_contract
         self.headers = dict(headers or {})
+        self.logger = logger if logger is not None else get_ai_logger("mcp")
+        self.metrics_logger = (
+            metrics_logger if metrics_logger is not None else get_ai_logger("metrics")
+        )
 
     async def async_candidates(self, service: str, *, protocol_version: str | None = None):
         if not isinstance(service, str) or not service.strip():
             raise ValueError("MCP service is required")
+        self.logger.debug(
+            "Discovering MCP candidates: namespace=%s service=%s protocolVersion=%s",
+            self.namespace, service,
+            self.protocol_version if protocol_version is None else protocol_version,
+        )
         response = await self.consumer.async_get_healthy_instances(
             GetHealthyInstancesRequest(
                 namespace=self.namespace,
@@ -233,6 +242,10 @@ class PolarisMCPResolver:
             if requested and versions and not requested.intersection(versions):
                 continue
             result.append(instance)
+        self.logger.debug(
+            "Discovered MCP candidates: service=%s healthy=%d",
+            service, len(result),
+        )
         return result
 
     async def async_disabled_tools(self, service: str, *, protocol: str = "", version: str = ""):
@@ -246,7 +259,8 @@ class PolarisMCPResolver:
                 )
             )
         except Exception as error:
-            logger.warning(
+            self.logger.warning_throttled(
+                ("contract", service),
                 "MCP contract unavailable for %s; skipping Tool filtering: %s",
                 service,
                 error,
@@ -254,12 +268,17 @@ class PolarisMCPResolver:
             return []
         if contract is None:
             return []
-        return [
+        disabled = [
             feature.name
             for feature in contract.service_features
             if feature.type == ServiceFeatureType.MCP_TOOL
             and feature.status == ServiceFeatureStatus.DISABLED
         ]
+        self.logger.debug(
+            "Loaded MCP contract filter: service=%s protocol=%s version=%s disabledTools=%d",
+            service, protocol, version, len(disabled),
+        )
+        return disabled
 
     async def async_create_client(
         self,
@@ -279,6 +298,10 @@ class PolarisMCPResolver:
         )
         if not instances:
             raise LookupError(f"No healthy MCP instance for {self.namespace}/{service}")
+        self.logger.debug(
+            "Selecting MCP instance: service=%s host=%s port=%s",
+            service, instances[0].get_host(), instances[0].get_port(),
+        )
         return await self.async_client_for_instance(
             service,
             instances[0],
@@ -302,6 +325,10 @@ class PolarisMCPResolver:
         disabled_tools: list[str] | None = None,
     ):
         url, port, protocol = mcp_endpoint(instance, scheme)
+        self.logger.debug(
+            "Creating MCP client: service=%s endpoint=%s protocol=%s stateful=%s",
+            service, url, protocol, protocol == MCP_SSE,
+        )
         if disabled_tools is None:
             if filter_contract:
                 disabled = await self.async_disabled_tools(
@@ -318,6 +345,7 @@ class PolarisMCPResolver:
             self.namespace,
             caller_service=self.caller_service,
             labels=self.labels,
+            logger=self.metrics_logger,
         )
         client = self.client_factory(
             name=_client_name(service),
@@ -393,6 +421,10 @@ class PolarisMCPClientPool:
         try:
             await self.refresh()
             self._task = asyncio.create_task(self._run(), name=f"polaris-mcp-pool-{self.service}")
+            self.resolver.logger.info(
+                "Started MCP client pool: service=%s clients=%d",
+                self.service, len(self._clients),
+            )
         except BaseException:
             try:
                 await await_completion(self._cleanup_start_failure())
@@ -419,13 +451,20 @@ class PolarisMCPClientPool:
             try:
                 await self.refresh()
             except Exception as error:
-                logger.warning("Failed to refresh MCP pool for %s: %s", self.service, error)
+                self.resolver.logger.warning_throttled(
+                    ("pool-refresh", self.service),
+                    "Failed to refresh MCP pool for %s: %s", self.service, error,
+                )
 
     async def refresh(self):
         """Reconcile current healthy instances with the native client pool."""
         async with self._lock:
             if self._closed:
                 return
+            self.resolver.logger.debug(
+                "Refreshing MCP client pool: service=%s currentClients=%d",
+                self.service, len(self._clients),
+            )
             instances = await self.resolver.async_candidates(
                 self.service,
                 protocol_version=self.protocol_version,
@@ -437,7 +476,10 @@ class PolarisMCPClientPool:
                         instance, self.client_options.get("scheme", "")
                     )
                 except ValueError as error:
-                    logger.warning("Skipping invalid MCP instance %s: %s", instance.get_id(), error)
+                    self.resolver.logger.warning_throttled(
+                        ("invalid-instance", self.service, instance.get_id()),
+                        "Skipping invalid MCP instance %s: %s", instance.get_id(), error,
+                    )
                     continue
                 disabled = (
                     await self.resolver.async_disabled_tools(
@@ -479,12 +521,28 @@ class PolarisMCPClientPool:
 
             if self._closed:
                 await self._close_clients(created)
+                self.resolver.logger.debug(
+                    "Discarded MCP clients created during close: service=%s count=%d",
+                    self.service, len(created),
+                )
                 return
 
+            previous_keys = set(self._clients)
+            next_keys = set(next_clients)
             previous, self._clients = self._clients, next_clients
             await self._close_clients(
                 tuple(client for key, client in previous.items() if key not in next_clients)
             )
+            self.resolver.logger.debug(
+                "MCP client pool reconciled: service=%s added=%s removed=%s",
+                self.service, sorted(next_keys - previous_keys), sorted(previous_keys - next_keys),
+            )
+            if next_keys != previous_keys:
+                self.resolver.logger.info(
+                    "MCP client pool changed: service=%s before=%d after=%d added=%d removed=%d",
+                    self.service, len(previous_keys), len(next_keys),
+                    len(next_keys - previous_keys), len(previous_keys - next_keys),
+                )
 
     async def _close_clients(self, clients):
         async def close_all():
@@ -492,7 +550,10 @@ class PolarisMCPClientPool:
                 try:
                     await client.close()
                 except Exception as error:
-                    logger.warning("Failed to close MCP client for %s: %s", self.service, error)
+                    self.resolver.logger.warning_throttled(
+                        ("close-client", self.service, getattr(client, "name", "")),
+                        "Failed to close MCP client for %s: %s", self.service, error,
+                    )
 
         await await_completion(close_all())
 
@@ -523,7 +584,12 @@ class PolarisMCPClientPool:
         self._closed = True
         self._refresh_event.set()
         task, self._task = self._task, None
+        self.resolver.logger.debug(
+            "Closing MCP client pool: service=%s clients=%d",
+            self.service, len(self._clients),
+        )
         await await_completion(self._close_resources(task))
+        self.resolver.logger.info("Closed MCP client pool: service=%s", self.service)
 
     async def __aenter__(self):
         return await self.start()

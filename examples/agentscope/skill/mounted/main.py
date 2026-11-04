@@ -19,7 +19,7 @@ import asyncio
 
 from agentscope.tool import Toolkit
 
-from examples.agentscope._common import context, parser
+from examples.agentscope._common import ai_logging, context, parser
 from polaris_ai.agentscope import PolarisSkillLoader
 
 
@@ -30,14 +30,15 @@ async def main(argv=None):
     args = arguments.parse_args(argv)
     sdk = context(args, entry=__file__)
     try:
-        async with PolarisSkillLoader(
-            sdk,
-            args.namespace,
-            service_name=args.service,
-            version=args.version,
-        ) as loader:
-            toolkit = Toolkit(skills_or_loaders=[loader])
-            print(await toolkit.get_skill_instructions() or "No mounted skills")
+        async with ai_logging(sdk, entry=__file__):
+            async with PolarisSkillLoader(
+                sdk,
+                args.namespace,
+                service_name=args.service,
+                version=args.version,
+            ) as loader:
+                toolkit = Toolkit(skills_or_loaders=[loader])
+                print(await toolkit.get_skill_instructions() or "No mounted skills")
     finally:
         await asyncio.to_thread(sdk.destroy)
 

@@ -26,9 +26,13 @@ class FakeContext:
     def __init__(self, engine):
         self.engine = engine
         self.destroyed = False
+        self.client_id = "fake-client"
 
     def get_engine(self):
         return self.engine
+
+    def get_client_id(self):
+        return self.client_id
 
     def is_destroy(self):
         return self.destroyed

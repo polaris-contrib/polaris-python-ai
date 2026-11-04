@@ -18,7 +18,7 @@
 import asyncio
 import json
 
-from examples.agentscope._common import context, parser
+from examples.agentscope._common import ai_logging, context, parser
 from polaris_ai.agentscope import PolarisMCPResolver
 from polaris_ai.agentscope.mcp import mcp_endpoint
 
@@ -34,41 +34,42 @@ async def main(argv=None):
     args = arguments.parse_args(argv)
 
     sdk = context(args, entry=__file__)
-    resolver = PolarisMCPResolver(sdk, args.namespace)
     try:
-        instances = await resolver.async_candidates(
-            args.service, protocol_version=args.protocol_version,
-        )
-        if not instances:
-            raise LookupError(f"No healthy MCP instance for {args.namespace}/{args.service}")
-        first = instances[0]
-        url, _port, protocol = mcp_endpoint(first, args.scheme)
-        disabled = await resolver.async_disabled_tools(
-            args.service, protocol=protocol, version=first.get_version(),
-        )
-        tools = []
-        if args.connect:
-            client = await resolver.async_create_client(
-                args.service,
-                protocol_version=args.protocol_version,
-                scheme=args.scheme,
-                timeout=args.mcp_timeout,
-                filter_contract=not args.no_filter_contract,
+        async with ai_logging(sdk, entry=__file__):
+            resolver = PolarisMCPResolver(sdk, args.namespace)
+            instances = await resolver.async_candidates(
+                args.service, protocol_version=args.protocol_version,
             )
-            try:
-                tools = [tool.name for tool in await client.list_raw_tools()]
-            finally:
-                await client.close()
-        result = {
-            "service": args.service,
-            "instances": [item.get_id() for item in instances],
-            "url": url,
-            "protocol": protocol,
-            "disabled_tools": disabled,
-            "tools": tools,
-        }
-        print(json.dumps(result), flush=True)
-        return result
+            if not instances:
+                raise LookupError(f"No healthy MCP instance for {args.namespace}/{args.service}")
+            first = instances[0]
+            url, _port, protocol = mcp_endpoint(first, args.scheme)
+            disabled = await resolver.async_disabled_tools(
+                args.service, protocol=protocol, version=first.get_version(),
+            )
+            tools = []
+            if args.connect:
+                client = await resolver.async_create_client(
+                    args.service,
+                    protocol_version=args.protocol_version,
+                    scheme=args.scheme,
+                    timeout=args.mcp_timeout,
+                    filter_contract=not args.no_filter_contract,
+                )
+                try:
+                    tools = [tool.name for tool in await client.list_raw_tools()]
+                finally:
+                    await client.close()
+            result = {
+                "service": args.service,
+                "instances": [item.get_id() for item in instances],
+                "url": url,
+                "protocol": protocol,
+                "disabled_tools": disabled,
+                "tools": tools,
+            }
+            print(json.dumps(result), flush=True)
+            return result
     finally:
         await asyncio.to_thread(sdk.destroy)
 

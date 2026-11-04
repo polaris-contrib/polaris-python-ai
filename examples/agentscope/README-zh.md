@@ -9,6 +9,9 @@
 `agentscope/mcp` 离线验证 MCP 实例解析和契约过滤。对 MCP 示例增加 `--connect` 后，
 会连接真实 MCP Server 并执行 `tools/list`。
 
+`agentscope/runtime` 演示使用 `PolarisAgentConfig` 和 `PolarisAgentRuntime`
+统一装配 Skill、A2A、可选 MCP 与 AI 分类日志。
+
 ```bash
 ./examples/verify.sh --only agentscope
 ./examples/verify_e2e.sh --only agentscope

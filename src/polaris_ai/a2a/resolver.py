@@ -16,7 +16,6 @@
 """Sticky AgentCard resolution using public Polaris discovery APIs."""
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from threading import RLock
 
@@ -26,10 +25,9 @@ from polaris.pkg.model.error import SDKError
 from polaris.pkg.model.service import GetHealthyInstancesRequest
 
 from polaris_ai._async import await_completion
+from polaris_ai.log import get_ai_logger
 
 from ._card import META_AGENT_CARD, AgentCard, decode_card
-
-logger = logging.getLogger(__name__)
 
 
 class AgentCardNotFoundError(LookupError):
@@ -51,13 +49,15 @@ class PolarisA2AResolver:
     discovery raises AgentCardNotFoundError. Card URLs are preserved as registered.
     """
 
-    def __init__(self, sdk_context, namespace: str = "default", *, timeout: int = 0):
+    def __init__(self, sdk_context, namespace: str = "default", *, timeout: int = 0,
+                 logger=None):
         if sdk_context is None or sdk_context.is_destroy():
             raise ValueError("An active SDKContext is required")
         if type(timeout) is not int or timeout < 0:
             raise ValueError("timeout must be a nonnegative integer")
         self.namespace = namespace.strip() or "default"
         self.timeout = timeout
+        self.logger = logger if logger is not None else get_ai_logger("a2a")
         self._context = sdk_context
         self._consumer = ConsumerAPI(sdk_context)
         self._cache: dict[str, _CachedCard] = {}
@@ -76,6 +76,10 @@ class PolarisA2AResolver:
         with self._lock:
             self._check_open()
             cached = self._cache.get(agent_name)
+            self.logger.debug(
+                "Resolving A2A agent: namespace=%s service=%s sticky=%s",
+                self.namespace, agent_name, cached is not None,
+            )
             try:
                 response = self._consumer.get_healthy_instances(GetHealthyInstancesRequest(
                     namespace=self.namespace, service=agent_name, timeout=self.timeout,
@@ -84,10 +88,17 @@ class PolarisA2AResolver:
             except SDKError:
                 if cached is None:
                     raise
-                logger.warning("Failed to refresh agent %s; reusing %s:%s",
-                               agent_name, cached.host, cached.port)
+                self.logger.warning_throttled(
+                    ("refresh", agent_name),
+                    "Failed to refresh agent %s; reusing %s:%s",
+                    agent_name, cached.host, cached.port,
+                )
                 return cached.card
             instances = [] if response is None else response.get_instances()
+            self.logger.debug(
+                "Discovered A2A candidates: namespace=%s service=%s count=%d",
+                self.namespace, agent_name, len(instances),
+            )
             instances = [i for i in instances if i.is_healthy() and not i.is_isolated()]
             if cached is not None:
                 sticky = [i for i in instances
@@ -98,18 +109,45 @@ class PolarisA2AResolver:
                 try:
                     card = decode_card(payload)
                 except (ValueError, TypeError, ParseError) as error:
-                    logger.warning("Skipping invalid AgentCard for %s at %s:%s: %s",
-                                   agent_name, instance.get_host(), instance.get_port(), error)
+                    self.logger.warning_throttled(
+                        ("invalid-card", agent_name, instance.get_host(), instance.get_port()),
+                        "Skipping invalid AgentCard for %s at %s:%s: %s",
+                        agent_name, instance.get_host(), instance.get_port(), error,
+                    )
                     continue
                 if card.name != agent_name:
-                    logger.warning("Skipping AgentCard %r while resolving %r", card.name, agent_name)
+                    self.logger.warning_throttled(
+                        ("wrong-name", agent_name, instance.get_host(), instance.get_port()),
+                        "Skipping AgentCard %r while resolving %r", card.name, agent_name,
+                    )
                     continue
                 if not any(i.url.strip() and i.protocol_binding.strip()
                            for i in card.supported_interfaces):
-                    logger.warning("Skipping endpoint-less AgentCard for %s", agent_name)
+                    self.logger.warning_throttled(
+                        ("no-endpoint", agent_name, instance.get_host(), instance.get_port()),
+                        "Skipping endpoint-less AgentCard for %s", agent_name,
+                    )
                     continue
+                if cached is not None and (
+                    cached.host != instance.get_host()
+                    or cached.port != instance.get_port()
+                ):
+                    self.logger.info(
+                        "Switched A2A agent %s/%s from %s:%s to %s:%s",
+                        self.namespace, agent_name, cached.host, cached.port,
+                        instance.get_host(), instance.get_port(),
+                    )
+                else:
+                    self.logger.debug(
+                        "Selected A2A instance: service=%s host=%s port=%s",
+                        agent_name, instance.get_host(), instance.get_port(),
+                    )
                 self._cache[agent_name] = _CachedCard(instance.get_host(), instance.get_port(), card)
                 return card
+            self.logger.debug(
+                "No usable A2A AgentCard: namespace=%s service=%s",
+                self.namespace, agent_name,
+            )
             raise AgentCardNotFoundError(f"No usable AgentCard for {self.namespace}/{agent_name}")
 
     async def async_resolve(self, agent_name: str) -> AgentCard:
@@ -117,10 +155,12 @@ class PolarisA2AResolver:
 
     def invalidate(self, agent_name: str):
         with self._lock:
+            self.logger.debug("Invalidating A2A card: service=%s", agent_name)
             self._cache.pop(agent_name, None)
 
     def invalidate_all(self):
         with self._lock:
+            self.logger.debug("Invalidating all A2A cards: count=%d", len(self._cache))
             self._cache.clear()
 
     @property
@@ -137,6 +177,7 @@ class PolarisA2AResolver:
         """Clear local cards while leaving the borrowed context available."""
         with self._lock:
             self._closed = True
+            self.logger.debug("Closing A2A resolver: cached=%d", len(self._cache))
             self._cache.clear()
 
     async def async_close(self):

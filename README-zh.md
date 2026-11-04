@@ -15,6 +15,10 @@ uv pip install -e ../polaris-python -e '.[agentscope,a2a]' --group dev
 SDK `0.2.0` 尚未发布到 PyPI，发布前使用 `[tool.uv.sources]` 指向相邻的
 `polaris-python` 源码项目。依赖声明保持 `polaris-python>=0.2.0,<0.3`；
 发布后可移除本地 source 映射。
+
+完整功能与配置见 [docs/configuration.md](docs/configuration.md)，包含 Core SDK、
+Skill、A2A、MCP 和 AI 日志配置。
+
 AgentScope 和 A2A 为可选依赖，基础包导入不会加载它们。当前验证组合为
 AgentScope 2.0.10 和 A2A SDK 1.2.3，A2A 使用官方兼容解析器读取 Java 卡片 JSON。
 
@@ -53,6 +57,45 @@ token 与 service token 保持分离。显式传入 `sdk_context` 时只借用�
 `skill.attach_to_agent` 为 true 时，`runtime.skill_toolkit` 会创建包含 Polaris
 loader 的原生 Toolkit；`runtime.create_agent()` 会同时接入 Toolkit 和动态刷新
 Middleware。
+
+## AI 日志
+
+AI 扩展默认不创建 Polaris 管理的日志文件。需要由 Runtime 管理分类日志时，
+传入独立的 `ai_log_options`：
+
+```python
+from polaris_ai import PolarisAILogOptions
+
+runtime = PolarisAgentRuntime(
+    config,
+    log_options=core_sdk_log_options,
+    ai_log_options=PolarisAILogOptions(
+        level="info",
+        log_dir="./polaris/log/ai",
+        max_bytes=50 * 1024 * 1024,
+        backup_count=5,
+        max_age_days=30,
+        warning_throttle_seconds=30,
+    ),
+)
+```
+
+默认与 Core SDK 日志分开存放在 `./polaris/log/ai`。分类为 `base`、
+`agentscope`、`skill`、`a2a`、`mcp` 和 `metrics`，文件按首次使用创建，例如
+`base/polaris-ai-base-<clientId>.log`。每类默认 50MB 滚动、保留 5 份和 30 天，
+并使用跨进程独占文件锁。
+
+代码未显式赋值的 level 和 path 会读取 `POLARIS_AI_LOG_LEVEL`、
+`POLARIS_AI_LOG_PATH`。`POLARIS_AI_LOG_CAPTURE_AGENTSCOPE=true` 可以在 Runtime
+生命周期内桥接 AgentScope `"as"` logger，但不会调用 `agentscope.setup_logger()`
+或替换 AgentScope 原有 handler。由于 `"as"` 是进程级 logger，同一进程同一时刻只能
+有一个活动 Runtime 捕获它。
+
+详细程度策略：
+
+- `INFO`：Runtime 生命周期、Skill 引用变化、A2A 实例切换和 MCP 池成员变化。
+- `DEBUG`：分页、缓存命中、候选过滤、选中地址和重试等高频细节。
+- `WARNING`：可恢复错误按 key 聚合，默认 30 秒内只输出一次；下一次输出会带上被抑制次数。
 
 ## Skill 加载
 

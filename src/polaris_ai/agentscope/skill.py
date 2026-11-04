@@ -17,7 +17,6 @@
 
 import asyncio
 import io
-import logging
 import re
 import shutil
 import stat
@@ -44,8 +43,8 @@ from polaris.pkg.model.service import ExtendedMetadata, GetAllInstancesRequest
 from polaris.pkg.model.skill import SkillDownloadRequest, SkillListRequest
 
 from polaris_ai._async import await_completion
+from polaris_ai.log import get_ai_logger
 
-logger = logging.getLogger(__name__)
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_FILES = 2048
 
@@ -83,6 +82,7 @@ class PolarisSkillLoader(SkillLoaderBase):
         max_skills: int = 100,
         refresh_interval: float = 30.0,
         timeout: int = 0,
+        logger=None,
     ):
         if sdk_context is None or sdk_context.is_destroy():
             raise ValueError("An active SDKContext is required")
@@ -105,6 +105,7 @@ class PolarisSkillLoader(SkillLoaderBase):
         self.max_skills = max_skills
         self.refresh_interval = refresh_interval
         self.timeout = timeout
+        self.logger = logger if logger is not None else get_ai_logger("skill")
         self._context = sdk_context
         self._skill_api = SkillAPI(sdk_context)
         self._consumer = ConsumerAPI(sdk_context)
@@ -150,6 +151,10 @@ class PolarisSkillLoader(SkillLoaderBase):
         """Return native AgentScope Skills; failed downloads are skipped and retried later."""
         async with self._lock:
             self._check_open()
+            self.logger.debug(
+                "Listing Polaris Skills: namespace=%s mounted=%s",
+                self.namespace, bool(self.service_name),
+            )
             await self._refresh_refs()
             self._check_open()
             result = []
@@ -158,7 +163,14 @@ class PolarisSkillLoader(SkillLoaderBase):
                     result.append(await self._load_skill(name, version))
                 except Exception as error:
                     self._check_open()
-                    logger.warning("Failed to load skill %s/%s: %s", self.namespace, name, error)
+                    self.logger.warning_throttled(
+                        ("load", name, version),
+                        "Failed to load skill %s/%s: %s", self.namespace, name, error,
+                    )
+            self.logger.debug(
+                "Listed Polaris Skills: namespace=%s requested=%d loaded=%d",
+                self.namespace, len(self._refs), len(result),
+            )
             return result
 
     async def async_get_skill(self, name: str, *, version: str | None = None) -> Skill:
@@ -169,6 +181,10 @@ class PolarisSkillLoader(SkillLoaderBase):
         async with self._lock:
             self._check_open()
             resolved = self.version if version is None else version.strip()
+            self.logger.debug(
+                "Loading Polaris Skill: namespace=%s name=%s version=%s",
+                self.namespace, name, resolved,
+            )
             if self.service_name:
                 await self._refresh_refs()
                 mounts = dict(self._refs)
@@ -203,17 +219,35 @@ class PolarisSkillLoader(SkillLoaderBase):
         return True
 
     async def _refresh_refs(self):
+        previous = self._refs
         if self.names:
-            self._refs = tuple((name, self.version) for name in self.names)
+            refs = tuple((name, self.version) for name in self.names)
+            if refs != previous:
+                self.logger.info(
+                    "Configured Polaris Skill references changed: namespace=%s count=%d",
+                    self.namespace, len(refs),
+                )
+                self.logger.debug("Configured Polaris Skill references: %s", refs)
+            self._refs = refs
             return
         if (self._refreshed_at is not None
                 and time.monotonic() - self._refreshed_at < self.refresh_interval
                 and (not self.service_name or self._refs)):
+            self.logger.debug(
+                "Reusing Polaris Skill reference cache: namespace=%s count=%d",
+                self.namespace, len(self._refs),
+            )
             return
         refs = await self._mounted_refs() if self.service_name else await self._published_refs()
         self._check_open()
         self._refs = tuple(refs)
         self._refreshed_at = time.monotonic()
+        if self._refs != previous:
+            self.logger.info(
+                "Polaris Skill references changed: namespace=%s mounted=%s before=%d after=%d",
+                self.namespace, bool(self.service_name), len(previous), len(self._refs),
+            )
+            self.logger.debug("Polaris Skill references: %s", self._refs)
 
     async def _published_refs(self):
         refs = []
@@ -225,6 +259,12 @@ class PolarisSkillLoader(SkillLoaderBase):
             if response is None or response.code not in (0, 200000):
                 raise RuntimeError("Failed to list skills from Polaris")
             resources = response.resources
+            self.logger.debug(
+                "Listed Polaris Skill page: namespace=%s offset=%d limit=%d "
+                "total=%s returned=%d",
+                self.namespace, offset, self.list_limit,
+                getattr(response, "total", None), len(resources or ()),
+            )
             if not resources:
                 break
             for resource in resources:
@@ -253,10 +293,16 @@ class PolarisSkillLoader(SkillLoaderBase):
             raw = skill.name if skill.name.strip() else skill.id
             namespace, separator, name = raw.partition(":")
             if not separator or not namespace.strip() or not name.strip():
-                logger.warning("Invalid mounted skill identity: %r", raw)
+                self.logger.warning_throttled(
+                    ("invalid-mount", raw),
+                    "Invalid mounted skill identity: %r", raw,
+                )
                 continue
             if namespace.strip() != self.namespace:
-                logger.warning("Skipping mounted skill %s outside namespace %s", raw, self.namespace)
+                self.logger.warning_throttled(
+                    ("mount-namespace", raw),
+                    "Skipping mounted skill %s outside namespace %s", raw, self.namespace,
+                )
                 continue
             refs.setdefault(name.strip(), skill.version.strip() or self.version)
         return list(refs.items())
@@ -265,7 +311,14 @@ class PolarisSkillLoader(SkillLoaderBase):
         self._check_open()
         fixed_key = (name, version) if version else None
         if fixed_key is not None and fixed_key in self._cache:
+            self.logger.debug(
+                "Using cached Polaris Skill: name=%s version=%s", name, version,
+            )
             return self._cache[fixed_key]
+        self.logger.debug(
+            "Downloading Polaris Skill: namespace=%s name=%s version=%s",
+            self.namespace, name, version or "<active>",
+        )
         response = await self._skill_api.async_download_skill(SkillDownloadRequest(
             namespace=self.namespace, name=name, version=version, timeout=self.timeout, format="zip",
         ))
@@ -284,11 +337,19 @@ class PolarisSkillLoader(SkillLoaderBase):
             raise RuntimeError(f"Failed to download skill {name!r} (empty ZIP)")
         actual_version = response.version if isinstance(response.version, str) else ""
         actual_version = actual_version.strip()
+        self.logger.debug(
+            "Downloaded Polaris Skill: name=%s requestedVersion=%s actualVersion=%s bytes=%d",
+            name, version or "<active>", actual_version or "<unknown>", len(response.data),
+        )
         if fixed_key is not None:
             cache_key = fixed_key
         else:
             cache_key = (name, actual_version) if actual_version else None
         if cache_key is not None and cache_key in self._cache:
+            self.logger.debug(
+                "Reusing materialized Polaris Skill: name=%s version=%s",
+                name, actual_version or version,
+            )
             return self._cache[cache_key]
         # Extraction is isolated from the event loop and close cannot race filesystem writes.
         return await await_completion(asyncio.to_thread(
@@ -317,6 +378,9 @@ class PolarisSkillLoader(SkillLoaderBase):
                 )
                 if key is not None:
                     self._cache[key] = skill
+                self.logger.debug(
+                    "Materialized Polaris Skill: name=%s directory=%s", skill.name, skill.dir,
+                )
                 return skill
             except BaseException:
                 shutil.rmtree(directory)
@@ -326,6 +390,10 @@ class PolarisSkillLoader(SkillLoaderBase):
         """Remove this loader's temporary assets without destroying the borrowed SDKContext."""
         with self._files_lock:
             self._closed = True
+            self.logger.debug(
+                "Closing Polaris Skill loader: namespace=%s cached=%d",
+                self.namespace, len(self._cache),
+            )
             self._cache.clear()
             self._refs = ()
             if self._directory is not None:

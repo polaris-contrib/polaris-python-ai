@@ -15,13 +15,12 @@
 
 """AgentScope middleware helpers for Polaris-backed agents."""
 
-import logging
 from weakref import WeakKeyDictionary
 
 from agentscope.middleware import MiddlewareBase
 from agentscope.skill import SkillLoaderBase
 
-logger = logging.getLogger(__name__)
+from polaris_ai.log import get_ai_logger
 
 _SHARED_SNAPSHOT_LOADERS = WeakKeyDictionary()
 
@@ -44,10 +43,11 @@ class PolarisDynamicSkillMiddleware(MiddlewareBase):
     with the loader's last successful state.
     """
 
-    def __init__(self, loader: SkillLoaderBase):
+    def __init__(self, loader: SkillLoaderBase, *, logger=None):
         if not isinstance(loader, SkillLoaderBase):
             raise TypeError("loader must implement SkillLoaderBase")
         self.loader = loader
+        self.logger = logger if logger is not None else get_ai_logger("agentscope")
         self.last_skills = ()
         snapshot = _SHARED_SNAPSHOT_LOADERS.get(loader)
         if snapshot is None:
@@ -56,12 +56,20 @@ class PolarisDynamicSkillMiddleware(MiddlewareBase):
         self._snapshot_loader = snapshot
 
     async def on_reply(self, agent, input_kwargs, next_handler):
+        self.logger.debug("Refreshing Polaris Skills before Agent reply")
         try:
             self.last_skills = tuple(await self.loader.list_skills())
         except Exception as error:
-            logger.warning("Failed to refresh Polaris Skills before reply: %s", error)
+            self.logger.warning_throttled(
+                ("refresh", id(self.loader)),
+                "Failed to refresh Polaris Skills before reply: %s", error,
+            )
         else:
             self._snapshot_loader.last_skills = self.last_skills
+            self.logger.debug(
+                "Refreshed Polaris Skill snapshot: count=%d names=%s",
+                len(self.last_skills), [skill.name for skill in self.last_skills],
+            )
         self._sync_toolkit(agent)
         async for event in next_handler():
             yield event
@@ -69,13 +77,22 @@ class PolarisDynamicSkillMiddleware(MiddlewareBase):
     def _sync_toolkit(self, agent):
         toolkit = getattr(agent, "toolkit", None)
         if toolkit is None:
+            self.logger.debug("Agent has no Toolkit; skipping Polaris Skill snapshot binding")
             return
         for group in getattr(toolkit, "tool_groups", ()):
             if group.name != "basic":
                 continue
             for index, item in enumerate(group.skills_or_loaders):
                 if item is self._snapshot_loader:
+                    self.logger.debug(
+                        "Polaris Skill snapshot already bound to Toolkit: category=%s",
+                        group.name,
+                    )
                     return
                 if item is self.loader:
                     group.skills_or_loaders[index] = self._snapshot_loader
+                    self.logger.debug(
+                        "Bound Polaris Skill snapshot to Toolkit: category=%s index=%d",
+                        group.name, index,
+                    )
                     return

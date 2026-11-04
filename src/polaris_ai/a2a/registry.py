@@ -17,7 +17,6 @@
 
 import asyncio
 import concurrent.futures
-import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from threading import Event, RLock
@@ -26,6 +25,7 @@ from polaris.api.provider import ProviderAPI
 from polaris.pkg.model.server import InstanceDeRegisterRequest, InstanceRegisterRequest
 
 from polaris_ai._async import await_completion, drain_task
+from polaris_ai.log import get_ai_logger
 
 from ._card import (
     MAX_METADATA_VALUE_CHARS,
@@ -36,8 +36,6 @@ from ._card import (
     AgentCard,
     encode_card,
 )
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,7 +67,7 @@ class PolarisA2ARegistrar:
     """
 
     def __init__(self, sdk_context, namespace: str = "default", *, service_token: str = "",
-                 ttl: int = 5):
+                 ttl: int = 5, logger=None):
         if sdk_context is None or sdk_context.is_destroy():
             raise ValueError("An active SDKContext is required")
         if not isinstance(service_token, str):
@@ -79,6 +77,7 @@ class PolarisA2ARegistrar:
         self.namespace = namespace.strip() or "default"
         self.ttl = ttl
         self.service_token = service_token.strip()
+        self.logger = logger if logger is not None else get_ai_logger("a2a")
         self._context = sdk_context
         self._provider = ProviderAPI(sdk_context)
         self._registered: list[RegisteredInstance] = []
@@ -102,6 +101,10 @@ class PolarisA2ARegistrar:
         with self._lock:
             self._check_open()
             requests = self._requests(agent_card, transports)
+            self.logger.debug(
+                "Registering A2A agent: namespace=%s service=%s transports=%d",
+                self.namespace, agent_card.name, len(requests),
+            )
             created = []
             try:
                 for request in requests:
@@ -113,10 +116,23 @@ class PolarisA2ARegistrar:
                     )
                     self._registered.append(instance)
                     created.append(instance)
+                    self.logger.debug(
+                        "Registered A2A transport: service=%s host=%s port=%s instanceId=%s",
+                        instance.service, instance.host, instance.port, instance.instance_id,
+                    )
                     if cancelled is not None and cancelled.is_set():
                         raise concurrent.futures.CancelledError()
+                self.logger.info(
+                    "Registered A2A agent %s/%s with %d transport(s)",
+                    self.namespace, agent_card.name, len(created),
+                )
                 return tuple(created)
             except BaseException:
+                self.logger.warning_throttled(
+                    ("register-rollback", agent_card.name),
+                    "Rolling back %d A2A transport registration(s) for %s/%s",
+                    len(created), self.namespace, agent_card.name,
+                )
                 self._deregister(created)
                 raise
 
@@ -163,9 +179,16 @@ class PolarisA2ARegistrar:
             try:
                 self._provider.deregister_instance(request)
             except Exception as error:
-                logger.warning("Failed to deregister A2A agent %s at %s:%s: %s",
-                               instance.service, instance.host, instance.port, error)
+                self.logger.warning_throttled(
+                    ("deregister", instance.service, instance.host, instance.port),
+                    "Failed to deregister A2A agent %s at %s:%s: %s",
+                    instance.service, instance.host, instance.port, error,
+                )
             else:
+                self.logger.debug(
+                    "Deregistered A2A transport: service=%s host=%s port=%s instanceId=%s",
+                    instance.service, instance.host, instance.port, instance.instance_id,
+                )
                 self._registered = [item for item in self._registered if item is not instance]
 
     async def async_register(self, agent_card: AgentCard, transports: Sequence[A2ATransport]):
@@ -193,6 +216,10 @@ class PolarisA2ARegistrar:
         """Retry every tracked deregistration; failures remain in ``registered``."""
         with self._lock:
             self._closed = True
+            self.logger.debug(
+                "Closing A2A registrar: namespace=%s remaining=%d",
+                self.namespace, len(self._registered),
+            )
             self._deregister(tuple(self._registered))
 
     async def async_close(self):

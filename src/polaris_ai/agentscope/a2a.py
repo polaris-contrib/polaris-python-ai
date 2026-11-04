@@ -21,6 +21,7 @@ import time
 from polaris.pkg.model.service import InstanceType
 
 from polaris_ai._async import await_completion
+from polaris_ai.log import get_ai_logger
 from polaris_ai.metrics import PolarisCallReporter
 
 
@@ -35,7 +36,7 @@ class PolarisA2AAgent:
     """
 
     def __init__(self, resolver, agent_name: str, *, agent_factory=None, reporter=None,
-                 caller_service: str = "", labels: str = ""):
+                 caller_service: str = "", labels: str = "", logger=None):
         if resolver is None:
             raise ValueError("A PolarisA2AResolver is required")
         if not isinstance(agent_name, str) or not agent_name.strip():
@@ -48,6 +49,7 @@ class PolarisA2AAgent:
         self._agent_name = agent_name.strip()
         self._agent_factory = agent_factory
         self._reporter = reporter
+        self.logger = logger if logger is not None else get_ai_logger("a2a")
         if self._reporter is None and getattr(resolver, "consumer", None) is not None:
             self._reporter = PolarisCallReporter(
                 resolver.consumer,
@@ -105,26 +107,35 @@ class PolarisA2AAgent:
     async def _ensure_agent(self):
         self._check_open()
         if self._agent is None:
+            self.logger.debug("Resolving A2A agent client: name=%s", self._agent_name)
             self._card = await self._resolver.async_resolve(self._agent_name)
             self._agent = self._agent_factory(self._card)
             await self._agent.__aenter__()
+            self.logger.debug("Created A2A agent client: name=%s", self._agent_name)
         return self._agent
 
     async def _close_agent(self):
         agent = self._agent
         if agent is None:
             return
+        self.logger.debug("Closing A2A agent client: name=%s", self._agent_name)
         await await_completion(agent.aclose())
         if self._agent is agent:
             self._agent = None
             self._card = None
 
     async def _replace_agent(self):
+        self.logger.warning_throttled(
+            ("rebuild", self._agent_name),
+            "Rebuilding A2A agent client after network failure: name=%s",
+            self._agent_name,
+        )
         await self._close_agent()
         await self._ensure_agent()
 
     async def reply(self, inputs):
         async with self._lock:
+            self.logger.debug("Sending non-streaming A2A request: name=%s", self._agent_name)
             agent = await self._ensure_agent()
             started_at = time.monotonic()
             final_message = None
@@ -138,6 +149,8 @@ class PolarisA2AAgent:
                 if final_message is None:
                     raise RuntimeError("A2A agent did not produce a final message")
                 await self._report_call(started_at, success=True)
+                self.logger.debug("Completed non-streaming A2A request: name=%s",
+                                  self._agent_name)
                 return final_message
             except BaseException as error:
                 await self._report_call(
@@ -145,10 +158,15 @@ class PolarisA2AAgent:
                     timeout=self._is_timeout(error),
                 )
                 if saw_remote_event or not self._is_retryable(error):
+                    self.logger.debug(
+                        "A2A request failed without retry: name=%s error=%r",
+                        self._agent_name, error,
+                    )
                     raise
                 await self._replace_agent()
                 retry_started = time.monotonic()
                 try:
+                    self.logger.debug("Retrying A2A request: name=%s", self._agent_name)
                     reply = await self._agent.reply(inputs)
                 except BaseException as retry_error:
                     await self._report_call(
@@ -157,10 +175,12 @@ class PolarisA2AAgent:
                     )
                     raise
                 await self._report_call(retry_started, success=True)
+                self.logger.debug("Retried A2A request succeeded: name=%s", self._agent_name)
                 return reply
 
     async def reply_stream(self, inputs, *, yield_final_msg: bool = False):
         async with self._lock:
+            self.logger.debug("Sending streaming A2A request: name=%s", self._agent_name)
             agent = await self._ensure_agent()
             started_at = time.monotonic()
             yielded = False
@@ -176,6 +196,10 @@ class PolarisA2AAgent:
                     timeout=self._is_timeout(error),
                 )
                 if yielded or not self._is_retryable(error):
+                    self.logger.debug(
+                        "A2A stream failed without retry: name=%s yielded=%s error=%r",
+                        self._agent_name, yielded, error,
+                    )
                     raise
                 await self._replace_agent()
                 async for event in self._agent.reply_stream(inputs, yield_final_msg=yield_final_msg):
@@ -184,6 +208,8 @@ class PolarisA2AAgent:
             finally:
                 if succeeded:
                     await self._report_call(started_at, success=True)
+                    self.logger.debug("Completed streaming A2A request: name=%s",
+                                      self._agent_name)
 
     async def _report_call(self, started_at, *, success, timeout=False):
         if self._reporter is None:
@@ -212,11 +238,13 @@ class PolarisA2AAgent:
         """Close the current client and make the next call resolve again."""
         async with self._lock:
             self._check_open()
+            self.logger.debug("Invalidating A2A agent client: name=%s", self._agent_name)
             await self._close_agent()
             self._resolver.invalidate(self._agent_name)
 
     async def aclose(self):
         self._closed = True
+        self.logger.debug("Closing A2A agent wrapper: name=%s", self._agent_name)
         await await_completion(self._close_all())
 
     async def _close_all(self):

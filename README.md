@@ -18,6 +18,9 @@ use the sibling `polaris-python` checkout configured by `[tool.uv.sources]`. The
 declared dependency remains `polaris-python>=0.2.0,<0.3`; after publication, remove
 that local source mapping.
 
+See [docs/configuration.md](docs/configuration.md) for the complete feature and
+configuration guide, including Core SDK, Skill, A2A, MCP and AI logging settings.
+
 AgentScope is optional; `polaris_ai.a2a` is framework-independent. Base-package
 imports do not load AgentScope or A2A. The integration targets AgentScope 2.0.10
 and A2A SDK 1.2.3. Legacy Java AgentCard JSON is decoded through the official
@@ -60,6 +63,48 @@ changes its configuration or ownership.
 When `skill.attach_to_agent` is true, `runtime.skill_toolkit` builds a native
 Toolkit containing the Polaris loader, and `runtime.create_agent()` attaches that
 Toolkit plus the dynamic refresh middleware.
+
+## AI Logging
+
+AI extension logging is optional and disabled for managed files by default. Set
+`ai_log_options` on the runtime to enable Polaris-managed category logs:
+
+```python
+from polaris_ai import PolarisAILogOptions
+
+runtime = PolarisAgentRuntime(
+    config,
+    log_options=core_sdk_log_options,
+    ai_log_options=PolarisAILogOptions(
+        level="info",
+        log_dir="./polaris/log/ai",
+        max_bytes=50 * 1024 * 1024,
+        backup_count=5,
+        max_age_days=30,
+        warning_throttle_seconds=30,
+    ),
+)
+```
+
+Managed logs are separated from Core SDK logs under `./polaris/log/ai` by
+default. Categories are `base`, `agentscope`, `skill`, `a2a`, `mcp`, and
+`metrics`. Each active runtime writes files such as
+`base/polaris-ai-base-<clientId>.log`; files are created on first use. Category
+files rotate at 50MB, keep five backups, retain backups for 30 days, and use
+exclusive file locks.
+
+`POLARIS_AI_LOG_LEVEL` and `POLARIS_AI_LOG_PATH` are used when the corresponding
+options are not assigned. `POLARIS_AI_LOG_CAPTURE_AGENTSCOPE=true` optionally
+adds an AgentScope `"as"` logger handler for the runtime lifetime. The extension
+does not call `agentscope.setup_logger()` or replace existing AgentScope handlers.
+Because `"as"` is process-global, only one active runtime can capture it at a time.
+
+The detail policy avoids flooding high-frequency paths:
+
+- `INFO`: runtime lifecycle, Skill reference changes, A2A instance failover and MCP pool changes.
+- `DEBUG`: per-page listing, cache hits, candidate filtering, selected endpoints and retries.
+- `WARNING`: recoverable failures, deduplicated by key. The default interval is 30 seconds;
+  the next emitted warning includes the number of suppressed occurrences.
 
 ## AgentScope Skill Loader
 
