@@ -25,6 +25,11 @@ from polaris_ai.log import get_ai_logger
 _SHARED_SNAPSHOT_LOADERS = WeakKeyDictionary()
 
 
+def get_shared_snapshot_loader(loader):
+    """Return the snapshot associated with a loader, if middleware created it."""
+    return _SHARED_SNAPSHOT_LOADERS.get(loader)
+
+
 class _SnapshotSkillLoader(SkillLoaderBase):
     """Expose the middleware's last successful Skill snapshot to a Toolkit."""
 
@@ -49,7 +54,7 @@ class PolarisDynamicSkillMiddleware(MiddlewareBase):
         self.loader = loader
         self.logger = logger if logger is not None else get_ai_logger("agentscope")
         self.last_skills = ()
-        snapshot = _SHARED_SNAPSHOT_LOADERS.get(loader)
+        snapshot = get_shared_snapshot_loader(loader)
         if snapshot is None:
             snapshot = _SnapshotSkillLoader()
             _SHARED_SNAPSHOT_LOADERS[loader] = snapshot

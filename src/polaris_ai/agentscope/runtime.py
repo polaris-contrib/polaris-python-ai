@@ -21,7 +21,10 @@ from polaris_ai._async import await_completion
 from polaris_ai.a2a import PolarisA2ARegistrar, PolarisA2AResolver
 from polaris_ai.agentscope.config import PolarisAgentConfig
 from polaris_ai.agentscope.context import PolarisAgentContext
-from polaris_ai.agentscope.middleware import PolarisDynamicSkillMiddleware
+from polaris_ai.agentscope.middleware import (
+    PolarisDynamicSkillMiddleware,
+    get_shared_snapshot_loader,
+)
 from polaris_ai.agentscope.skill import PolarisSkillLoader
 from polaris_ai.log import PolarisAILogOptions, configure_ai_logging
 
@@ -167,6 +170,22 @@ class PolarisAgentRuntime:
     def _attach_skill_loader(self, toolkit):
         for group in toolkit.tool_groups:
             if group.name == "basic":
+                snapshot = get_shared_snapshot_loader(self.skill_loader)
+                if snapshot is not None:
+                    normalized = []
+                    snapshot_present = False
+                    for item in group.skills_or_loaders:
+                        if item is self.skill_loader:
+                            continue
+                        if item is snapshot:
+                            if snapshot_present:
+                                continue
+                            snapshot_present = True
+                        normalized.append(item)
+                    if not snapshot_present:
+                        normalized.append(snapshot)
+                    group.skills_or_loaders[:] = normalized
+                    return
                 if self.skill_loader not in group.skills_or_loaders:
                     group.skills_or_loaders.append(self.skill_loader)
                 return

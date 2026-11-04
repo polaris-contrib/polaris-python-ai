@@ -301,6 +301,29 @@ class PolarisAILogger:
         self.close()
 
 
+class _ClosedLogger:
+    """Swallow late diagnostics after a managed runtime has closed."""
+
+    @staticmethod
+    def debug(*_args, **_kwargs):
+        return None
+
+    @staticmethod
+    def info(*_args, **_kwargs):
+        return None
+
+    @staticmethod
+    def warning(*_args, **_kwargs):
+        return None
+
+    @staticmethod
+    def error(*_args, **_kwargs):
+        return None
+
+
+_CLOSED_LOGGER = _ClosedLogger()
+
+
 class _CategoryLogger:
     """Resolve a category logger at emission time without changing std logging."""
 
@@ -320,10 +343,20 @@ class _CategoryLogger:
     def _target(self):
         manager = self._manager
         if manager is not None:
-            return manager._logger_for(self.category)
+            try:
+                return manager._logger_for(self.category)
+            except RuntimeError:
+                if manager._closed:
+                    return _CLOSED_LOGGER
+                raise
         bound = _bound_logger.get()
         if bound is not None:
-            return bound._logger_for(self.category)
+            try:
+                return bound._logger_for(self.category)
+            except RuntimeError:
+                if bound._closed:
+                    return _CLOSED_LOGGER
+                raise
         return logging.getLogger(f"polaris_ai.{self.category}")
 
     def debug(self, msg, *args, **kwargs):

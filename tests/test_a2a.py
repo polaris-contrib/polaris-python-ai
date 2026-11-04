@@ -15,6 +15,7 @@
 
 import asyncio
 import json
+import tempfile
 from threading import Event
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import patch
@@ -34,6 +35,7 @@ from polaris_ai.a2a import (
     PolarisA2AServerRegistration,
 )
 from polaris_ai.a2a._card import decode_card, encode_card
+from polaris_ai.log import PolarisAILogOptions, configure_ai_logging
 from tests._support import FakeContext, FakeEngine, instance, snapshot
 
 
@@ -111,6 +113,27 @@ class RegistrarTests(TestCase):
         self.assertEqual((), self.registrar.registered)
         self.assertEqual(3, len(self.engine.deregister_calls))
         self.assertFalse(self.context.is_destroy())
+
+    def test_closed_ai_logger_does_not_block_registrar_cleanup_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = configure_ai_logging(
+                "registrar-retry",
+                PolarisAILogOptions(log_dir=directory, max_age_days=0),
+            )
+            registrar = PolarisA2ARegistrar(
+                self.context,
+                service_token="token",
+                logger=manager.get_logger("a2a"),
+            )
+            registrar.register(card(), [A2ATransport("10.0.0.1", 8080)])
+            self.engine.deregister_failures.add("id-1")
+            registrar.close()
+            self.assertEqual(1, len(registrar.registered))
+
+            manager.close()
+            self.engine.deregister_failures.clear()
+            registrar.close()
+            self.assertEqual((), registrar.registered)
 
     def test_invalid_transport_and_oversize_card_fail_before_rpc(self):
         with self.assertRaises(ValueError):

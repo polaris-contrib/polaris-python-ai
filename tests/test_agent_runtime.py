@@ -14,11 +14,18 @@
 # specific language governing permissions and limitations under the License.
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from agentscope.permission import PermissionBehavior, PermissionDecision
 from agentscope.tool import ToolBase, Toolkit
+from polaris.pkg.model.skill import (
+    SkillDownloadResponse,
+    SkillListResponse,
+    SkillResource,
+    SkillVersionInfo,
+)
 
 from polaris_ai.agentscope import PolarisAgentConfig, PolarisAgentRuntime
 from polaris_ai.agentscope.config import (
@@ -28,7 +35,7 @@ from polaris_ai.agentscope.config import (
 )
 from polaris_ai.agentscope.middleware import PolarisDynamicSkillMiddleware
 from polaris_ai.log import PolarisAILogOptions
-from tests._support import FakeContext, FakeEngine
+from tests._support import FakeContext, FakeEngine, skill_zip
 
 
 def test_runtime_composes_skill_loader_and_borrowed_context_is_not_destroyed():
@@ -151,10 +158,75 @@ def test_attach_to_agent_merges_loader_into_custom_toolkit():
     assert agent.call_args.kwargs["toolkit"] is toolkit
     basic = next(group for group in toolkit.tool_groups if group.name == "basic")
     assert basic.tools
-    assert [runtime.skill_loader] == [
-        loader for loader in basic.skills_or_loaders if loader is runtime.skill_loader
-    ]
+    assert runtime.skill_loader not in basic.skills_or_loaders
+    assert len(basic.skills_or_loaders) == 1
     runtime.close()
+
+
+def test_reusing_custom_toolkit_after_snapshot_does_not_readd_original_loader():
+    async def scenario():
+        engine = FakeEngine()
+        engine.pages = [
+            SkillListResponse(
+                total=1,
+                resources=[SkillResource(
+                    name="weather",
+                    version_info=SkillVersionInfo(active_version="v1"),
+                )],
+            )
+        ]
+        engine.downloads[("weather", "v1")] = SkillDownloadResponse(
+            version="v1",
+            content_type="application/zip",
+            data=skill_zip(name="weather"),
+        )
+        context = FakeContext(engine)
+        runtime = PolarisAgentRuntime(
+            PolarisAgentConfig(
+                a2a=PolarisA2AConfig(enabled=False),
+                skill=PolarisSkillConfig(refresh_interval=0),
+            ),
+            sdk_context=context,
+        )
+        toolkit = Toolkit()
+
+        async def next_handler():
+            yield "reply"
+
+        with patch("agentscope.agent.Agent") as agent:
+            runtime.create_agent(
+                name="weather-agent",
+                system_prompt="Use skills",
+                model="model",
+                toolkit=toolkit,
+            )
+        first_middleware = agent.call_args.kwargs["middlewares"][-1]
+        bound_agent = SimpleNamespace(toolkit=toolkit)
+        [event async for event in first_middleware.on_reply(
+            bound_agent, {}, next_handler,
+        )]
+
+        engine.pages = [RuntimeError("Polaris unavailable")]
+        with patch("agentscope.agent.Agent") as agent:
+            runtime.create_agent(
+                name="weather-agent",
+                system_prompt="Use skills",
+                model="model",
+                toolkit=toolkit,
+            )
+        second_middleware = agent.call_args.kwargs["middlewares"][-1]
+        [event async for event in second_middleware.on_reply(
+            bound_agent, {}, next_handler,
+        )]
+        instructions = await toolkit.get_skill_instructions()
+        basic = toolkit.tool_groups[0]
+
+        assert "weather" in instructions
+        assert runtime.skill_loader not in basic.skills_or_loaders
+        assert len(basic.skills_or_loaders) == 1
+        runtime.close()
+
+    asyncio.run(scenario())
 
 
 def test_runtime_builds_mcp_resolver_only_when_enabled():
