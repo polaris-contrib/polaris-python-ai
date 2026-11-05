@@ -44,7 +44,7 @@ src/polaris_ai/_version.py
 ```
 
 ```python
-__version__ = "0.1.0"
+__version__ = "0.0.1.dev0"
 ```
 
 `pyproject.toml` 使用 setuptools 动态版本，不保存具体版本号：
@@ -77,10 +77,10 @@ A2A、AgentScope 和 LangGraph 子模块的 `__version__` 同样指向这个文�
 src/polaris_ai/_version.py
 ```
 
-例如发布 `0.2.0`：
+例如发布第一个正式版本 `0.0.1`：
 
 ```python
-__version__ = "0.2.0"
+__version__ = "0.0.1"
 ```
 
 以下文件不需要仅因版本号变化而修改：
@@ -123,7 +123,7 @@ uv lock --check
 依赖 `polaris-python` 时使用兼容范围：
 
 ```toml
-dependencies = ["polaris-python>=0.2.0,<0.3"]
+dependencies = ["polaris-python>=0.0.1.dev0,<0.1"]
 ```
 
 修改依赖下限或上限时，需要同时更新 `pyproject.toml` 和 `uv.lock`。
@@ -181,23 +181,23 @@ Snapshot workflow：
 
 即使 workflow 被触发，也只有版本包含 `.dev` 时才构建和发布。
 
-需要生成 Snapshot 时，把版本设置为开发基线：
+当前首次 Snapshot 的开发基线是：
 
 ```python
 # src/polaris_ai/_version.py
-__version__ = "0.2.1.dev0"
+__version__ = "0.0.1.dev0"
 ```
 
 workflow 生成：
 
 ```text
-0.2.1.dev<GITHUB_RUN_NUMBER>
+0.0.1.dev<GITHUB_RUN_NUMBER>
 ```
 
 例如第 42 次 workflow：
 
 ```text
-0.2.1.dev42
+0.0.1.dev42
 ```
 
 CI 只修改构建工作区，不回写仓库。重跑使用同一个 `GITHUB_RUN_NUMBER`，
@@ -207,16 +207,22 @@ PyPI 已存在的文件通过 `skip-existing` 跳过。
 的开发基线：
 
 ```text
-发布 0.2.0
-→ main 设置为 0.2.1.dev0
-→ 自动发布 0.2.1.dev<run>
-→ 正式发布前改为 0.2.1
-→ 发布 polaris-python-ai==0.2.1
-→ main 再设置为 0.2.2.dev0
+首次创建项目：
+main 设置为 0.0.1.dev0
+→ Snapshot 发布 0.0.1.dev<run>
+→ 第一次成功后创建 PyPI 项目
+
+正式发布后：
+发布 polaris-python-ai==0.0.1
+→ main 设置为 0.0.2.dev0
+→ 自动发布 0.0.2.dev<run>
+→ 正式发布前改为 0.0.2
+→ 发布 polaris-python-ai==0.0.2
+→ main 再设置为 0.0.3.dev0
 ```
 
-不能对已经发布的 `0.2.0` 直接生成 `0.2.0.devN`，因为 PEP 440 中
-`0.2.0.devN < 0.2.0`。
+不能对已经发布的 `0.0.1` 直接生成 `0.0.1.devN`，因为 PEP 440 中
+`0.0.1.devN < 0.0.1`。
 
 ## 7. Release
 
@@ -235,15 +241,15 @@ polaris-python-ai==<version>
 例如：
 
 ```text
-polaris-python-ai==0.2.0
+polaris-python-ai==0.0.1
 ```
 
 workflow 要求 tag 中的版本与 `src/polaris_ai/_version.py` 完全一致。以下格式不接受：
 
 ```text
-v0.2.0
-0.2.0
-polaris-python-ai==0.2.1
+v0.0.1
+0.0.1
+polaris-python-ai==0.0.2
 ```
 
 发布流程：

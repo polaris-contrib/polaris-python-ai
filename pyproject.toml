@@ -5,7 +5,7 @@ description = "Polaris integrations for Python AI frameworks."
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.12"
-dependencies = ["polaris-python>=0.2.0,<0.3"]
+dependencies = ["polaris-python>=0.0.1.dev0,<0.1"]
 
 [project.optional-dependencies]
 a2a = ["a2a-sdk>=1.2.3,<2"]

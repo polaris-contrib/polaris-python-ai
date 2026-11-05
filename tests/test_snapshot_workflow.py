@@ -70,6 +70,7 @@ def run_step_script(step, cwd, **extra_env):
 def test_project_uses_one_distribution_and_one_version_source():
     project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     assert project["project"]["name"] == "polaris-python-ai"
+    assert project["project"]["dependencies"] == ["polaris-python>=0.0.1.dev0,<0.1"]
     assert project["project"]["dynamic"] == ["version"]
     assert "version" not in project["project"]
     assert project["tool"]["setuptools"]["dynamic"]["version"] == {
@@ -128,6 +129,7 @@ def test_snapshot_triggers_on_main_relevant_changes_and_checks_dev_version():
     assert jobs["build"]["if"] == "${{ needs.check-snapshot.outputs.IS_SNAPSHOT == 'true' }}"
     assert jobs["publish"]["needs"] == "build"
     assert jobs["publish"]["environment"] == "Release"
+    assert jobs["publish"]["permissions"] == {"contents": "read", "id-token": "write"}
 
 
 def test_snapshot_upload_and_publish_use_the_same_verified_artifact():
@@ -136,7 +138,9 @@ def test_snapshot_upload_and_publish_use_the_same_verified_artifact():
     download, publish = config["jobs"]["publish"]["steps"]
     assert upload["with"]["name"] == download["with"]["name"]
     assert upload["with"]["path"] == "polaris-python-ai/dist/"
-    assert publish["with"]["password"] == "${{ secrets.PYPI_API_TOKEN }}"
+    assert "user" not in publish["with"]
+    assert "password" not in publish["with"]
+    assert publish["with"]["attestations"] == "true"
     assert publish["with"]["skip-existing"] == "true"
 
 
@@ -144,7 +148,16 @@ def test_release_requires_the_canonical_single_package_tag():
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     assert "polaris-python-ai==" in text
     assert 'RELEASE_TAG"] != expected' in text
-    assert "working-directory" not in load_workflow(RELEASE_WORKFLOW)["on"]["workflow_dispatch"]["inputs"]
+    config = load_workflow(RELEASE_WORKFLOW)
+    assert "working-directory" not in config["on"]["workflow_dispatch"]["inputs"]
+    publish = config["jobs"]["publish"]
+    assert publish["environment"] == "Release"
+    assert publish["permissions"] == {"contents": "read", "id-token": "write"}
+    step = next(step for step in publish["steps"]
+                if step.get("uses") == "pypa/gh-action-pypi-publish@release/v1")
+    assert "user" not in step["with"]
+    assert "password" not in step["with"]
+    assert step["with"]["attestations"] == "true"
 
 
 def test_testing_checks_one_lockfile_and_one_wheel():

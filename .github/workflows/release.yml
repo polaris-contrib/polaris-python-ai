@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag, for example polaris-python-ai==0.1.0
+        description: Existing release tag, for example polaris-python-ai==0.0.1
         required: true
         type: string
 
@@ -121,6 +121,7 @@ jobs:
     environment: Release
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Download verified distributions
         uses: actions/download-artifact@v4
@@ -130,7 +131,6 @@ jobs:
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist/
           print-hash: true
+          attestations: true
