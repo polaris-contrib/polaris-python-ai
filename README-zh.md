@@ -1,8 +1,32 @@
-# polaris-python-ai
+<div align="center">
+  <h1>Polaris AI Registry for Python</h1>
+  <h3>面向 Python AI 框架的注册发现与弹性路由集成。</h3>
+</div>
 
-面向 Python AI 框架的北极星扩展。本仓库只发布一个 distribution
-`polaris-python-ai`，通过可选 extras 提供 A2A、AgentScope、MCP 和 LangGraph
-适配，公开导入名统一为 `polaris_ai`，底层调用 `polaris-python` 公开 API。
+`polaris-python-ai` 将 AgentScope、A2A、MCP 和 LangGraph 应用接入北极星，
+但不替代框架原有的执行引擎。本仓库只发布一个 distribution，通过可选 extras
+提供各框架适配，公开导入名统一为 `polaris_ai`。
+
+> [!NOTE]
+> Polaris 与 LangGraph 是互补关系。原生 `RemoteGraph` 的执行仍由 LangGraph
+> 负责；Polaris 为其提供实例注册、健康感知发现、端点选择、故障切换和调用上报。
+
+## 为什么使用 polaris-python-ai
+
+- **统一接入入口**：按应用需要安装框架 extras，同时共享同一个版本号和导入命名空间。
+- **注册中心发现**：通过 Polaris 获取健康、未隔离的 Agent、MCP 和 LangGraph 端点，
+  无需硬编码实例地址。
+- **弹性远程调用**：保持端点粘性、刷新发现结果，并在实例变化后重建原生客户端。
+- **完整生命周期**：支持实例注册、自动心跳、实例缺失重注册，以及正常或异常退出时反注册。
+- **可观测性**：上报 A2A、MCP 和 LangGraph 调用，并将 AI 框架日志与 Core SDK 日志分离。
+
+## 框架生态
+
+- **Core SDK**：`polaris-python` 提供注册、发现、Skill 和服务契约等底层能力。
+- **AgentScope**：共享 Context、Skill 加载、A2A Agent、MCP Client、Runtime 装配和动态刷新。
+- **A2A**：AgentCard 注册发现、原生 AgentScope Agent 和生命周期封装。
+- **MCP**：服务契约过滤、原生 AgentScope Client、连接池和 Tool 调用上报。
+- **LangGraph**：RemoteGraph 注册、Graph 感知发现、粘性路由、原生客户端复用和调用指标。
 
 ## 安装
 
@@ -25,10 +49,23 @@ pip install "polaris-python-ai[langgraph]"
 pip install "polaris-python-ai[mcp]"
 ```
 
-单版本文件、Snapshot 和 Release tag 见 [docs/version-release.md](docs/version-release.md)。
+安装全部框架适配：
+
+```bash
+pip install "polaris-python-ai[all]"
+```
+
+## 文档
+
+- [功能与配置](docs/configuration.md)
+- [版本、Snapshot 与发布](docs/version-release.md)
+- [示例索引](examples/README-zh.md)
+- [AgentScope 示例](examples/agentscope/README-zh.md)
+- [LangGraph 官方文档](https://docs.langchain.com/oss/python/langgraph/overview)
+- [LangGraph API 参考](https://reference.langchain.com/python/langgraph)
 
 完整功能与配置见 [docs/configuration.md](docs/configuration.md)，包含 Core SDK、
-Skill、A2A、MCP 和 AI 日志配置。
+Skill、A2A、MCP、LangGraph 和 AI 日志配置。
 
 AgentScope、A2A 和 LangGraph 为可选依赖，基础包导入不会加载它们。当前验证组合为
 AgentScope 2.0.10、A2A SDK 1.2.3 和 LangGraph 1.x，A2A 使用官方兼容解析器读取

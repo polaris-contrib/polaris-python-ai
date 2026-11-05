@@ -1,10 +1,46 @@
-# polaris-python-ai
+<div align="center">
+  <h1>Polaris AI Registry for Python</h1>
+  <h3>Registration, discovery, and resilient routing for Python AI frameworks.</h3>
+</div>
 
-Polaris integrations for Python AI frameworks. The repository publishes one
-distribution, `polaris-python-ai`, with optional A2A, AgentScope, MCP, and
-LangGraph extras under the `polaris_ai` import namespace.
+`polaris-python-ai` connects AgentScope, A2A, MCP, and LangGraph applications
+to Polaris without replacing the framework execution engine. The repository
+publishes one distribution with optional framework extras under the
+`polaris_ai` import namespace.
 
-## Development Installation
+> [!NOTE]
+> Polaris complements LangGraph rather than replacing it. Native
+> `RemoteGraph` execution remains owned by LangGraph; Polaris provides instance
+> registration, health-aware discovery, endpoint selection, failover, and call
+> reporting around it.
+
+## Why use polaris-python-ai?
+
+- **One integration surface:** install only the framework extras an application
+  needs while keeping one version and import namespace.
+- **Registry-backed discovery:** resolve healthy, non-isolated Agent, MCP, and
+  LangGraph endpoints instead of hard-coding instance addresses.
+- **Resilient remote calls:** preserve endpoint stickiness, refresh discovery,
+  and rebuild native clients when an instance changes.
+- **Lifecycle support:** register instances, keep heartbeats active, recover from
+  missing registrations, and deregister during normal or exceptional shutdown.
+- **Operational visibility:** report A2A, MCP, and LangGraph calls while keeping AI
+  framework logs separate from Core SDK logs.
+
+## Framework ecosystem
+
+- **Core SDK:** `polaris-python` provides the registration, discovery, Skill, and
+  service-contract APIs used by every adapter.
+- **AgentScope:** shared contexts, Skill loading, A2A Agents, MCP clients, runtime
+  assembly, and dynamic Skill refresh.
+- **A2A:** AgentCard registration, discovery, native AgentScope Agents, and
+  lifecycle wrappers.
+- **MCP:** service-contract filtering, native AgentScope clients, pools, and
+  Tool-call reporting.
+- **LangGraph:** RemoteGraph registration, graph-aware discovery, sticky routing,
+  native client reuse, and invocation metrics.
+
+## Installation
 
 Use Python 3.12 or newer. Run from this project's root directory:
 
@@ -25,11 +61,24 @@ pip install "polaris-python-ai[langgraph]"
 pip install "polaris-python-ai[mcp]"
 ```
 
-See [docs/version-release.md](docs/version-release.md) for the single version file,
-Snapshot format, and release tag.
+To install every framework adapter:
+
+```bash
+pip install "polaris-python-ai[all]"
+```
+
+## Documentation
+
+- [Configuration and operation](docs/configuration.md)
+- [Versioning, Snapshot, and release](docs/version-release.md)
+- [Examples](examples/README.md)
+- [AgentScope examples](examples/agentscope/README.md)
+- [LangGraph documentation](https://docs.langchain.com/oss/python/langgraph/overview)
+- [LangGraph API reference](https://reference.langchain.com/python/langgraph)
 
 See [docs/configuration.md](docs/configuration.md) for the complete feature and
-configuration guide, including Core SDK, Skill, A2A, MCP and AI logging settings.
+configuration guide, including Core SDK, Skill, A2A, MCP, LangGraph, and AI
+logging settings.
 
 AgentScope, A2A, and LangGraph are optional. Base-package imports do not load
 their SDKs. The integration targets AgentScope 2.0.10, A2A SDK 1.2.3, and
