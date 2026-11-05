@@ -23,9 +23,13 @@ from polaris_ai.metrics import PolarisCallReporter
 class FakeConsumer:
     def __init__(self):
         self.results = []
+        self.sync_results = []
 
     async def async_update_service_call_result(self, result):
         self.results.append(result)
+
+    def sync_update_service_call_result(self, result):
+        self.sync_results.append(result)
 
 
 class MetricsTests(IsolatedAsyncioTestCase):
@@ -57,3 +61,20 @@ class MetricsTests(IsolatedAsyncioTestCase):
         self.assertEqual("10.0.0.1", result.get_host())
         self.assertEqual("caller", result.caller_service.get_service())
         self.assertEqual("env=prod", result.labels)
+
+    async def test_report_sync_maps_framework_call_without_using_event_loop(self):
+        consumer = FakeConsumer()
+        reporter = PolarisCallReporter(consumer, "production")
+        reporter.report_sync(
+            service="graph-service",
+            host="10.0.0.8",
+            port=8123,
+            method="langgraph.invoke",
+            instance_type=InstanceType.LANGGRAPH,
+            started_at=0,
+            success=True,
+        )
+        result = consumer.sync_results[0]
+        self.assertEqual(RetStatus.RetSuccess, result.get_ret_status())
+        self.assertEqual("langgraph.invoke", result.get_method())
+        self.assertEqual(InstanceType.LANGGRAPH, result.instance_type)

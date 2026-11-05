@@ -11,7 +11,7 @@ example_manage() {
     elif [[ -x "${example_repo_dir}/.venv/bin/python" ]]; then
         exec "${example_repo_dir}/.venv/bin/python" "${example_scripts_dir}/_manage.py" --directory "$@"
     elif command -v uv >/dev/null 2>&1; then
-        exec uv run --project "$example_repo_dir" --extra agentscope --extra a2a python "${example_scripts_dir}/_manage.py" --directory "$@"
+        exec uv run --project "$example_repo_dir" --all-extras python "${example_scripts_dir}/_manage.py" --directory "$@"
     else
         exec python3 "${example_scripts_dir}/_manage.py" --directory "$@"
     fi

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to publish, for example v0.1.0
+        description: Existing release tag, for example polaris-python-ai==0.1.0
         required: true
         type: string
 
@@ -31,7 +31,7 @@ jobs:
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Verify lockfile
         working-directory: polaris-python-ai
         run: uv lock --check
@@ -40,31 +40,28 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          set -euo pipefail
-          package_version="$(python3 - <<'PY'
-          import runpy
-          import tomllib
+          uv run --no-project python - <<'PY'
+          import ast
+          import os
           from pathlib import Path
 
-          pyproject_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))[
-              "project"
-          ]["version"]
-          module_version = runpy.run_path("src/polaris_ai/__init__.py")["__version__"]
-          if pyproject_version != module_version:
+          about = Path("src/polaris_ai/_version.py")
+          assignments = [
+              node for node in ast.parse(about.read_text(encoding="utf-8")).body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "__version__"
+                      for target in node.targets)
+          ]
+          if len(assignments) != 1:
+              raise SystemExit(f"expected one __version__ assignment in {about}")
+          package_version = ast.literal_eval(assignments[0].value)
+          expected = f"polaris-python-ai=={package_version}"
+          if os.environ["RELEASE_TAG"] != expected:
               raise SystemExit(
-                  f"pyproject version {pyproject_version!r} does not match "
-                  f"polaris_ai.__version__ {module_version!r}"
+                  f"release tag {os.environ['RELEASE_TAG']!r} must be {expected!r}"
               )
-          print(pyproject_version)
+          print(f"Releasing {expected}")
           PY
-          )"
-          tag_version="${RELEASE_TAG#v}"
-          tag_version="${tag_version#polaris-python-ai==}"
-          if [[ "$tag_version" != "$package_version" ]]; then
-            echo "Release tag '$RELEASE_TAG' does not match package version '$package_version'." >&2
-            exit 1
-          fi
-          echo "Releasing polaris-python-ai $package_version"
       - name: Build core SDK dependency
         working-directory: polaris-python
         run: uv build
@@ -73,40 +70,41 @@ jobs:
         run: uv build
       - name: Create clean wheel environment
         run: uv venv "$RUNNER_TEMP/polaris-ai-release-venv" --python 3.12
-      - name: Install wheel with dependencies
+      - name: Install verified wheel
         run: |
           uv pip install --python "$RUNNER_TEMP/polaris-ai-release-venv/bin/python" \
             polaris-python/dist/*.whl
           wheel="$(ls polaris-python-ai/dist/*.whl)"
           uv pip install --python "$RUNNER_TEMP/polaris-ai-release-venv/bin/python" \
-            "${wheel}[agentscope,a2a,mcp]" \
-            "pytest>=8.3,<9"
+            "${wheel}[all]" \
+            "pytest>=8.3,<9" \
+            "pytest-cov>=6,<8" \
+            "uvicorn>=0.30,<1" \
+            "a2a-sdk[fastapi]>=1.2.3,<2"
       - name: Verify installed distribution
         working-directory: ${{ runner.temp }}
         run: |
           "$RUNNER_TEMP/polaris-ai-release-venv/bin/python" - <<'PY'
           import sys
-          from importlib.metadata import requires, version
+          from importlib.metadata import packages_distributions, requires, version
           from pathlib import Path
 
           import polaris_ai
-          from polaris_ai.a2a import A2ATransport, PolarisA2ARegistrar, PolarisA2AResolver
-          from polaris_ai.agentscope import PolarisAgentConfig
+          import polaris_ai.a2a
+          import polaris_ai.agentscope
+          import polaris_ai.langgraph
 
           assert version("polaris-python-ai") == polaris_ai.__version__
+          assert polaris_ai.a2a.__version__ == polaris_ai.__version__
+          assert polaris_ai.agentscope.__version__ == polaris_ai.__version__
+          assert polaris_ai.langgraph.__version__ == polaris_ai.__version__
+          assert packages_distributions()["polaris_ai"] == ["polaris-python-ai"]
           assert Path(polaris_ai.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-          assert any(
-              item.startswith("polaris-python") and "../polaris-python" not in item
-              for item in requires("polaris-python-ai") or ()
-          )
-          assert A2ATransport and PolarisA2ARegistrar and PolarisA2AResolver
-          assert PolarisAgentConfig.from_env({}).namespace == "default"
-          print(f"verified polaris-python-ai {polaris_ai.__version__} from {polaris_ai.__file__}")
+          assert not any("file://" in item for item in requires("polaris-python-ai") or ())
+          print(f"verified polaris-python-ai {polaris_ai.__version__}")
           PY
       - name: Run tests against installed wheel
         working-directory: polaris-python-ai
-        env:
-          POLARIS_PYTHON: ${{ runner.temp }}/polaris-ai-release-venv/bin/python
         run: |
           "$RUNNER_TEMP/polaris-ai-release-venv/bin/python" -m pytest tests -q
       - name: Upload distributions

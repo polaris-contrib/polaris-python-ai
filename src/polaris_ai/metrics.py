@@ -48,7 +48,7 @@ class PolarisCallReporter:
         self.caller_ip = caller_ip
         self.logger = logger if logger is not None else get_ai_logger("metrics")
 
-    async def report(
+    def _build_result(
         self,
         *,
         service: str,
@@ -62,11 +62,11 @@ class PolarisCallReporter:
         timeout: bool = False,
     ):
         if not service or not host:
-            return
+            return None
         status = RetStatus.RetSuccess if success else (
             RetStatus.RetTimeout if timeout else RetStatus.RetFail
         )
-        result = ServiceCallResult(
+        return ServiceCallResult(
             ret_status=status,
             ret_code=ret_code,
             delay=max(0, int((time.monotonic() - started_at) * 1000)),
@@ -83,10 +83,72 @@ class PolarisCallReporter:
             host=host,
             port=port,
         )
+
+    async def report(
+        self,
+        *,
+        service: str,
+        host: str,
+        port: int,
+        method: str,
+        instance_type: str,
+        started_at: float,
+        success: bool,
+        ret_code: int | None = None,
+        timeout: bool = False,
+    ):
+        result = self._build_result(
+            service=service,
+            host=host,
+            port=port,
+            method=method,
+            instance_type=instance_type,
+            started_at=started_at,
+            success=success,
+            ret_code=ret_code,
+            timeout=timeout,
+        )
+        if result is None:
+            return
         try:
             await self.consumer.async_update_service_call_result(result)
         except Exception as error:
             self.logger.warning_throttled(
                 ("report", instance_type, service),
+                "Failed to report %s call for %s: %s", instance_type, service, error,
+            )
+
+    def report_sync(
+        self,
+        *,
+        service: str,
+        host: str,
+        port: int,
+        method: str,
+        instance_type: str,
+        started_at: float,
+        success: bool,
+        ret_code: int | None = None,
+        timeout: bool = False,
+    ):
+        """Synchronously report one synchronous framework call."""
+        result = self._build_result(
+            service=service,
+            host=host,
+            port=port,
+            method=method,
+            instance_type=instance_type,
+            started_at=started_at,
+            success=success,
+            ret_code=ret_code,
+            timeout=timeout,
+        )
+        if result is None:
+            return
+        try:
+            self.consumer.sync_update_service_call_result(result)
+        except Exception as error:
+            self.logger.warning_throttled(
+                ("report-sync", instance_type, service),
                 "Failed to report %s call for %s: %s", instance_type, service, error,
             )

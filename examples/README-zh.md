@@ -3,8 +3,7 @@
 在项目根目录安装 Python 3.12+ 和示例依赖：
 
 ```bash
-uv venv
-uv pip install -e '.[agentscope,a2a]' --group dev
+uv sync --all-extras
 ./examples/verify.sh
 ./examples/verify.sh --only agentscope/skill
 ./examples/verify.sh --only agentscope/a2a/skill

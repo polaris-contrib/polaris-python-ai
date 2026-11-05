@@ -419,6 +419,26 @@ AgentScope `"as"` logger 是进程级全局对象。同一进程同一时刻只�
 | `POLARIS_AI_MCP_CALLER_SERVICE` | caller service |
 | `POLARIS_AI_MCP_LABELS` | labels |
 
+### LangGraph
+
+| 变量 | 说明 |
+| --- | --- |
+| `POLARIS_AI_LANGGRAPH_ENABLED` | LangGraph 配置总开关 |
+| `POLARIS_AI_LANGGRAPH_ADDRESS` | 注册中心地址 |
+| `POLARIS_AI_LANGGRAPH_NAMESPACE` | 命名空间 |
+| `POLARIS_AI_LANGGRAPH_GRAPH_ID` | LangGraph graph/assistant ID |
+| `POLARIS_AI_LANGGRAPH_SERVICE` | Polaris service，空时等于 graph ID |
+| `POLARIS_AI_LANGGRAPH_PATH` | LangGraph Server base path |
+| `POLARIS_AI_LANGGRAPH_PROTOCOL` | `http` 或 `https` |
+| `POLARIS_AI_LANGGRAPH_API_KEY` | RemoteGraph API key |
+| `POLARIS_AI_LANGGRAPH_HEADERS` | `name=value` header 列表 |
+| `POLARIS_AI_LANGGRAPH_REGISTRY_ENABLED` | 注册开关 |
+| `POLARIS_AI_LANGGRAPH_TTL` | 自动心跳 TTL |
+| `POLARIS_AI_LANGGRAPH_DISCOVERY_ENABLED` | 发现开关 |
+| `POLARIS_AI_LANGGRAPH_DISCOVERY_TIMEOUT` | 发现超时毫秒 |
+| `POLARIS_AI_LANGGRAPH_CALLER_SERVICE` | 调用结果 caller service |
+| `POLARIS_AI_LANGGRAPH_LABELS` | 调用结果 labels |
+
 ### 日志
 
 | 变量 | 说明 |
@@ -560,6 +580,34 @@ pool = PolarisMCPClientPool(
 | `streaming` | `True` |
 | `skills` | 空 |
 
+### LangGraph
+
+LangGraph 适配位于单一 `polaris-python-ai` 包中，通过
+`pip install "polaris-python-ai[langgraph]"` 安装可选依赖。
+
+`PolarisLangGraphRegistrar`：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `namespace` | `default` | 实例命名空间 |
+| `service_token` | 空 | 无鉴权服务可为空 |
+| `ttl` | 5 | 自动心跳 TTL 秒数 |
+
+`LangGraphTransport`：
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `host` | 必填 | 已监听 LangGraph Server 的业务地址 |
+| `port` | 必填 | Server 端口 |
+| `path` | `/` | Server base path，必须是绝对路径 |
+| `graph_id` | 空 | 空时使用注册 service 名作为 graph ID |
+| `support_tls` | `False` | 是否注册为 HTTPS |
+
+`PolarisLangGraphResolver` 的参数为 `namespace` 和毫秒级 `timeout`。
+`PolarisRemoteGraph` 支持 `graph_id`、`service`、`api_key`、`headers`、
+`graph_factory`、`reporter`、`caller_service`、`labels`；调用入口为
+`invoke`、`ainvoke`、`stream` 和 `astream`。
+
 ## 13. 功能边界
 
 当前支持：
@@ -569,6 +617,7 @@ pool = PolarisMCPClientPool(
 - A2A 注册、心跳、发现、AgentCard、黏性路由和重试。
 - MCP 发现、契约过滤、ClientPool watch、客户端重建。
 - A2A/MCP 调用结果上报。
+- LangGraph 实例注册、健康发现、RemoteGraph 同步/异步路由和调用结果上报。
 - 多 Context 配置、连接、日志和资源隔离。
 - AI 分类日志、滚动、保留、文件锁和 warning 聚合。
 
@@ -579,7 +628,6 @@ pool = PolarisMCPClientPool(
 - watch 事件用于通用 Skill 刷新 API。
 - 自定义日志 formatter 和按分类级别。
 - 多 Runtime 同时桥接 AgentScope `"as"` logger。
-- LangGraph 集成。
 
 ## 14. 安全检查
 

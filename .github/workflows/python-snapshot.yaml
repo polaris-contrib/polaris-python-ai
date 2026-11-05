@@ -1,4 +1,4 @@
-name: Snapshot-Python
+name: Snapshot-Python-AI
 
 on:
   push:
@@ -7,15 +7,13 @@ on:
       - release/*
       - develop
     paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'examples/**'
-      - 'pyproject.toml'
-      - 'uv.lock'
-      - '.github/workflows/python-snapshot.yaml'
-      - '!src/**.md'
-      - '!tests/**.md'
-      - '!examples/**.md'
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/python-snapshot.yaml"
+      - "!src/**.md"
+      - "!tests/**.md"
   workflow_dispatch:
 
 permissions:
@@ -36,28 +34,18 @@ jobs:
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Check package version
         id: check_version
         run: |
           uv run --no-project --with packaging python - <<'PY'
           import os
           import runpy
-          import tomllib
           from pathlib import Path
 
           from packaging.version import Version
 
-          package_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))[
-              "project"
-          ]["version"]
-          module_version = runpy.run_path("src/polaris_ai/__init__.py")["__version__"]
-          if package_version != module_version:
-              raise SystemExit(
-                  f"pyproject version {package_version!r} does not match "
-                  f"polaris_ai.__version__ {module_version!r}"
-              )
-          configured = Version(package_version)
+          configured = Version(runpy.run_path("src/polaris_ai/_version.py")["__version__"])
           is_snapshot = configured.dev is not None
           if is_snapshot and configured.local is not None:
               raise SystemExit("PyPI development releases must not have a local version label")
@@ -85,7 +73,7 @@ jobs:
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - name: Verify lockfile
         working-directory: polaris-python-ai
         run: uv lock --check
@@ -96,32 +84,22 @@ jobs:
           uv run --no-project --with packaging python - <<'PY'
           import ast
           import os
-          import tomllib
           from pathlib import Path
 
           from packaging.version import Version
 
-          pyproject = Path("pyproject.toml")
-          init = Path("src/polaris_ai/__init__.py")
-          package_text = pyproject.read_text(encoding="utf-8")
-          package_version = tomllib.loads(package_text)["project"]["version"]
-          init_text = init.read_text(encoding="utf-8")
+          about = Path("src/polaris_ai/_version.py")
+          text = about.read_text(encoding="utf-8")
           assignments = [
-              node for node in ast.parse(init_text).body
+              node for node in ast.parse(text).body
               if isinstance(node, ast.Assign)
               and any(isinstance(target, ast.Name) and target.id == "__version__"
                       for target in node.targets)
           ]
           if len(assignments) != 1 or len(assignments[0].targets) != 1:
-              raise SystemExit(f"expected one __version__ assignment in {init}")
+              raise SystemExit(f"expected one __version__ assignment in {about}")
           assignment = assignments[0]
-          module_version = ast.literal_eval(assignment.value)
-          if package_version != module_version:
-              raise SystemExit(
-                  f"pyproject version {package_version!r} does not match "
-                  f"polaris_ai.__version__ {module_version!r}"
-              )
-          configured = Version(package_version)
+          configured = Version(ast.literal_eval(assignment.value))
           if configured.dev is None or configured.local is not None:
               raise SystemExit(f"{configured} is not a public development version")
           run_number = int(os.environ["GITHUB_RUN_NUMBER"])
@@ -129,15 +107,9 @@ jobs:
               raise SystemExit("GITHUB_RUN_NUMBER must be positive")
           base = str(configured).rsplit(".dev", 1)[0]
           version = str(Version(f"{base}.dev{run_number}"))
-          pyproject.write_text(
-              package_text.replace(f'version = "{package_version}"', f'version = "{version}"', 1),
-              encoding="utf-8",
-          )
-          init_lines = init_text.splitlines(keepends=True)
-          init_lines[assignment.lineno - 1:assignment.end_lineno] = [
-              f'__version__ = "{version}"\n'
-          ]
-          init.write_text("".join(init_lines), encoding="utf-8")
+          lines = text.splitlines(keepends=True)
+          lines[assignment.lineno - 1:assignment.end_lineno] = [f'__version__ = "{version}"\n']
+          about.write_text("".join(lines), encoding="utf-8")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               print(f"VERSION={version}", file=output)
           print(f"{configured} -> {version}")
@@ -150,14 +122,17 @@ jobs:
         run: uv build
       - name: Create clean wheel environment
         run: uv venv "$RUNNER_TEMP/polaris-ai-snapshot-venv" --python 3.12
-      - name: Install wheel with dependencies
+      - name: Install verified wheel
         run: |
           uv pip install --python "$RUNNER_TEMP/polaris-ai-snapshot-venv/bin/python" \
             polaris-python/dist/*.whl
           wheel="$(ls polaris-python-ai/dist/*.whl)"
           uv pip install --python "$RUNNER_TEMP/polaris-ai-snapshot-venv/bin/python" \
-            "${wheel}[agentscope,a2a,mcp]" \
-            "pytest>=8.3,<9"
+            "${wheel}[all]" \
+            "pytest>=8.3,<9" \
+            "pytest-cov>=6,<8" \
+            "uvicorn>=0.30,<1" \
+            "a2a-sdk[fastapi]>=1.2.3,<2"
       - name: Verify installed distribution
         working-directory: ${{ runner.temp }}
         env:
@@ -166,27 +141,25 @@ jobs:
           "$RUNNER_TEMP/polaris-ai-snapshot-venv/bin/python" - <<'PY'
           import os
           import sys
-          from importlib.metadata import requires, version
+          from importlib.metadata import packages_distributions, requires, version
           from pathlib import Path
 
           import polaris_ai
-          from polaris_ai.a2a import A2ATransport, PolarisA2ARegistrar, PolarisA2AResolver
-          from polaris_ai.agentscope import PolarisAgentConfig
+          import polaris_ai.a2a
+          import polaris_ai.agentscope
+          import polaris_ai.langgraph
 
           assert version("polaris-python-ai") == polaris_ai.__version__ == os.environ["SNAPSHOT_VERSION"]
+          assert polaris_ai.a2a.__version__ == polaris_ai.__version__
+          assert polaris_ai.agentscope.__version__ == polaris_ai.__version__
+          assert polaris_ai.langgraph.__version__ == polaris_ai.__version__
+          assert packages_distributions()["polaris_ai"] == ["polaris-python-ai"]
           assert Path(polaris_ai.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
-          assert any(
-              item.startswith("polaris-python") and "../polaris-python" not in item
-              for item in requires("polaris-python-ai") or ()
-          )
-          assert A2ATransport and PolarisA2ARegistrar and PolarisA2AResolver
-          assert PolarisAgentConfig.from_env({}).namespace == "default"
-          print(f"verified polaris-python-ai {polaris_ai.__version__} from {polaris_ai.__file__}")
+          assert not any("file://" in item for item in requires("polaris-python-ai") or ())
+          print(f"verified polaris-python-ai {polaris_ai.__version__}")
           PY
       - name: Run tests against installed wheel
         working-directory: polaris-python-ai
-        env:
-          POLARIS_PYTHON: ${{ runner.temp }}/polaris-ai-snapshot-venv/bin/python
         run: |
           "$RUNNER_TEMP/polaris-ai-snapshot-venv/bin/python" -m pytest tests -q
       - name: Upload verified distributions
@@ -214,5 +187,4 @@ jobs:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist/
           print-hash: true
-          # Reruns keep the same run number and package version.
           skip-existing: true

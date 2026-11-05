@@ -39,7 +39,7 @@ from polaris.api._log_file import (
 
 from polaris_ai._async import await_completion
 
-LOG_CATEGORIES = ("base", "agentscope", "skill", "a2a", "mcp", "metrics")
+LOG_CATEGORIES = ("base", "agentscope", "skill", "a2a", "mcp", "langgraph", "metrics")
 DEFAULT_AI_LOG_DIR = "./polaris/log/ai"
 DEFAULT_WARNING_THROTTLE_SECONDS = 30.0
 

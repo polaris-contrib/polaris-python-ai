@@ -1,26 +1,38 @@
 # polaris-python-ai
 
-面向 Python AI 框架的北极星扩展，公开导入名为 `polaris_ai`。当前实现 AgentScope
-Skill、A2A、MCP、配置装配和自动调用上报；底层调用 `polaris-python` 公开 API。
+面向 Python AI 框架的北极星扩展。本仓库只发布一个 distribution
+`polaris-python-ai`，通过可选 extras 提供 A2A、AgentScope、MCP 和 LangGraph
+适配，公开导入名统一为 `polaris_ai`，底层调用 `polaris-python` 公开 API。
 
 ## 安装
 
 使用 Python 3.12 或更高版本，在本项目根目录执行：
 
 ```bash
-uv venv
-uv pip install -e ../polaris-python -e '.[agentscope,a2a]' --group dev
+uv sync --all-extras
+uv run python -m pytest
 ```
 
-SDK `0.2.0` 尚未发布到 PyPI，发布前使用 `[tool.uv.sources]` 指向相邻的
-`polaris-python` 源码项目。依赖声明保持 `polaris-python>=0.2.0,<0.3`；
-发布后可移除本地 source 映射。
+相邻 `polaris-python` 通过 `[tool.uv.sources]` 参与本地解析；发布 wheel
+只声明版本范围。
+
+通过 extras 安装对应适配器：
+
+```bash
+pip install "polaris-python-ai[a2a]"
+pip install "polaris-python-ai[agentscope]"
+pip install "polaris-python-ai[langgraph]"
+pip install "polaris-python-ai[mcp]"
+```
+
+单版本文件、Snapshot 和 Release tag 见 [docs/version-release.md](docs/version-release.md)。
 
 完整功能与配置见 [docs/configuration.md](docs/configuration.md)，包含 Core SDK、
 Skill、A2A、MCP 和 AI 日志配置。
 
-AgentScope 和 A2A 为可选依赖，基础包导入不会加载它们。当前验证组合为
-AgentScope 2.0.10 和 A2A SDK 1.2.3，A2A 使用官方兼容解析器读取 Java 卡片 JSON。
+AgentScope、A2A 和 LangGraph 为可选依赖，基础包导入不会加载它们。当前验证组合为
+AgentScope 2.0.10、A2A SDK 1.2.3 和 LangGraph 1.x，A2A 使用官方兼容解析器读取
+Java 卡片 JSON。
 
 ## 共享 AgentScope Context
 
@@ -81,7 +93,7 @@ runtime = PolarisAgentRuntime(
 ```
 
 默认与 Core SDK 日志分开存放在 `./polaris/log/ai`。分类为 `base`、
-`agentscope`、`skill`、`a2a`、`mcp` 和 `metrics`，文件按首次使用创建，例如
+`agentscope`、`skill`、`a2a`、`mcp`、`langgraph` 和 `metrics`，文件按首次使用创建，例如
 `base/polaris-ai-base-<clientId>.log`。每类默认 50MB 滚动、保留 5 份和 30 天，
 并使用跨进程独占文件锁。
 
@@ -206,11 +218,59 @@ MCP 应用可通过 `POLARIS_AI_MCP_ENABLED=true` 启用 resolver，并配置
 `POLARIS_AI_MCP_FILTER_CONTRACT`、`POLARIS_AI_MCP_CALLER_SERVICE` 和
 `POLARIS_AI_MCP_LABELS`。
 
+## LangGraph
+
+```python
+from polaris_ai.langgraph import (
+    LangGraphTransport,
+    PolarisLangGraphContext,
+    PolarisLangGraphRegistrar,
+    PolarisLangGraphResolver,
+    PolarisRemoteGraph,
+)
+
+with PolarisLangGraphContext.from_address(
+    "127.0.0.1:8091",
+    "production",
+) as polaris, PolarisLangGraphRegistrar(
+    polaris.context,
+    "production",
+) as registrar, PolarisLangGraphResolver(
+    polaris.context,
+    "production",
+) as resolver:
+    registrar.register(
+        "review-service",
+        [LangGraphTransport("10.0.0.8", 8123, "/api", graph_id="review-graph")],
+    )
+    with PolarisRemoteGraph(
+        resolver,
+        "review-graph",
+        service="review-service",
+    ) as graph:
+        result = graph.invoke(
+            {"messages": []},
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+```
+
+注册器把 `langgraph.graph-id`、`langgraph.path` 和 `langgraph.protocol` 写入普通
+Polaris 实例。Resolver 只选择对应 graph 的健康、未隔离实例，优先复用上次
+`host:port`；发现临时失败时复用最近一次成功端点。
+
+`PolarisRemoteGraph` 提供 `invoke`、`ainvoke`、`stream` 和 `astream`。每次调用都会
+刷新发现，并以 `instance_type="langgraph"` 上报结果，不改变 LangGraph 的返回值或
+异常。原生 `RemoteGraph` 客户端在 URL 不变时复用，切换实例后重建。
+
+`PolarisLangGraphConfig.from_env()` 优先读取 `POLARIS_AI_LANGGRAPH_*`，并接受
+`POLARIS_SERVER_ADDRESS`、`POLARIS_TOKEN`、`POLARIS_SERVICE_TOKEN` 和
+`POLARIS_NAMESPACE` 作为回退。
+
 ## 验证
 
 ```bash
-python -m pytest
-python -m build
+uv run python -m pytest
+uv build
 ./examples/verify.sh
 ./examples/verify.sh --only agentscope/a2a/skill
 ./examples/verify.sh --only agentscope/mcp
@@ -223,5 +283,4 @@ python -m build
 运行参数、前置资源、日志和清理见 [examples/test.md](examples/test.md)。
 可运行的已发布 Skill、挂载 Skill、A2A provider / consumer 和 Skill 驱动 A2A 示例见
 [examples/agentscope](examples/agentscope/README.md)，A2A Echo 示例无需模型密钥。
-
-LangGraph、真实 MCP Server E2E、远端治理和 Skill 写操作暂不在当前范围。
+真实 MCP Server E2E、远端 Controller 治理和 Skill 写操作暂不在当前范围。

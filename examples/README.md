@@ -3,8 +3,7 @@
 Install Python 3.12+ and the example dependencies from the project root:
 
 ```bash
-uv venv
-uv pip install -e '.[agentscope,a2a]' --group dev
+uv sync --all-extras
 ./examples/verify.sh
 ./examples/verify.sh --only agentscope/skill
 ./examples/verify.sh --only agentscope/a2a/skill

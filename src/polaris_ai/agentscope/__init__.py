@@ -17,6 +17,8 @@
 
 from importlib import import_module
 
+from polaris_ai._version import __version__
+
 __all__ = [
     "PolarisSkillLoader",
     "PolarisAgentContext",
@@ -38,6 +40,7 @@ __all__ = [
     "PolarisSkillRepositoryInfo",
     "PolarisAILogOptions",
     "PolarisAILogger",
+    "__version__",
 ]
 
 

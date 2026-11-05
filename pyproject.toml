@@ -1,6 +1,6 @@
 [project]
 name = "polaris-python-ai"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Polaris integrations for Python AI frameworks."
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -8,9 +8,29 @@ requires-python = ">=3.12"
 dependencies = ["polaris-python>=0.2.0,<0.3"]
 
 [project.optional-dependencies]
-agentscope = ["agentscope>=2.0.10,<3"]
 a2a = ["a2a-sdk>=1.2.3,<2"]
-mcp = ["agentscope>=2.0.10,<3", "mcp>=2,<3"]
+agentscope = [
+    "a2a-sdk>=1.2.3,<2",
+    "agentscope>=2.0.10,<3",
+]
+langgraph = ["langgraph>=1.0,<2"]
+mcp = [
+    "a2a-sdk>=1.2.3,<2",
+    "agentscope>=2.0.10,<3",
+    "mcp>=2,<3",
+]
+all = [
+    "a2a-sdk>=1.2.3,<2",
+    "agentscope>=2.0.10,<3",
+    "langgraph>=1.0,<2",
+    "mcp>=2,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/polaris-contrib/polaris-python-ai"
+Repository = "https://github.com/polaris-contrib/polaris-python-ai"
+Issues = "https://github.com/polaris-contrib/polaris-python-ai/issues"
+Documentation = "https://github.com/polaris-contrib/polaris-python-ai#readme"
 
 [dependency-groups]
 dev = [
@@ -30,6 +50,9 @@ polaris-python = { path = "../polaris-python", editable = true }
 
 [tool.setuptools]
 packages = { find = { where = ["src"] } }
+
+[tool.setuptools.dynamic]
+version = { attr = "polaris_ai._version.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

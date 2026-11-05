@@ -15,6 +15,7 @@
 
 """Framework-independent A2A registration and card discovery."""
 
+from polaris_ai._version import __version__
 from .registry import A2ATransport, PolarisA2ARegistrar, RegisteredInstance
 from .resolver import AgentCardNotFoundError, PolarisA2AResolver
 from .server import PolarisA2AServerRegistration
@@ -26,4 +27,5 @@ __all__ = [
     "AgentCardNotFoundError",
     "PolarisA2AResolver",
     "PolarisA2AServerRegistration",
+    "__version__",
 ]

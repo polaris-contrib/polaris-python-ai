@@ -39,7 +39,7 @@ package: build
 	stage="$(CURDIR)/.build/stage"; \
 	rm -rf "$$stage"; \
 	mkdir -p "$$stage/examples/agentscope"; \
-	cp "$(REPO_ROOT)/pyproject.toml" "$(REPO_ROOT)/README.md" "$$stage/"; \
+	cp "$(REPO_ROOT)/pyproject.toml" "$(REPO_ROOT)/README.md" "$(REPO_ROOT)/README-zh.md" "$$stage/"; \
 	mkdir -p "$$stage/src"; \
 	cp -R "$(REPO_ROOT)/src/polaris_ai" "$$stage/src/"; \
 	[ ! -f "$(REPO_ROOT)/LICENSE" ] || cp "$(REPO_ROOT)/LICENSE" "$$stage/"; \

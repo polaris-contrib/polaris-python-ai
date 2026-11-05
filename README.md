@@ -1,30 +1,40 @@
 # polaris-python-ai
 
-Polaris integrations for Python AI frameworks. The current implementation covers
-AgentScope Skill, A2A, MCP, configuration assembly and automatic call reporting
-using the public `polaris-python` SDK. Import namespace: `polaris_ai`.
+Polaris integrations for Python AI frameworks. The repository publishes one
+distribution, `polaris-python-ai`, with optional A2A, AgentScope, MCP, and
+LangGraph extras under the `polaris_ai` import namespace.
 
 ## Development Installation
 
 Use Python 3.12 or newer. Run from this project's root directory:
 
 ```bash
-uv venv
-uv pip install -e ../polaris-python -e '.[agentscope,a2a]' --group dev
+uv sync --all-extras
+uv run python -m pytest
 ```
 
-The SDK version `0.2.0` has not yet been published to PyPI. Until it is published,
-use the sibling `polaris-python` checkout configured by `[tool.uv.sources]`. The
-declared dependency remains `polaris-python>=0.2.0,<0.3`; after publication, remove
-that local source mapping.
+The sibling `polaris-python` checkout is selected through `[tool.uv.sources]`;
+published wheel metadata contains only version ranges.
+
+Install framework adapters through package extras:
+
+```bash
+pip install "polaris-python-ai[a2a]"
+pip install "polaris-python-ai[agentscope]"
+pip install "polaris-python-ai[langgraph]"
+pip install "polaris-python-ai[mcp]"
+```
+
+See [docs/version-release.md](docs/version-release.md) for the single version file,
+Snapshot format, and release tag.
 
 See [docs/configuration.md](docs/configuration.md) for the complete feature and
 configuration guide, including Core SDK, Skill, A2A, MCP and AI logging settings.
 
-AgentScope is optional; `polaris_ai.a2a` is framework-independent. Base-package
-imports do not load AgentScope or A2A. The integration targets AgentScope 2.0.10
-and A2A SDK 1.2.3. Legacy Java AgentCard JSON is decoded through the official
-A2A compatibility parser.
+AgentScope, A2A, and LangGraph are optional. Base-package imports do not load
+their SDKs. The integration targets AgentScope 2.0.10, A2A SDK 1.2.3, and
+LangGraph 1.x. Legacy Java AgentCard JSON is decoded through the official A2A
+compatibility parser.
 
 ## Shared AgentScope Context
 
@@ -87,8 +97,8 @@ runtime = PolarisAgentRuntime(
 ```
 
 Managed logs are separated from Core SDK logs under `./polaris/log/ai` by
-default. Categories are `base`, `agentscope`, `skill`, `a2a`, `mcp`, and
-`metrics`. Each active runtime writes files such as
+default. Categories are `base`, `agentscope`, `skill`, `a2a`, `mcp`,
+`langgraph`, and `metrics`. Each active runtime writes files such as
 `base/polaris-ai-base-<clientId>.log`; files are created on first use. Category
 files rotate at 50MB, keep five backups, retain backups for 30 days, and use
 exclusive file locks.
@@ -235,11 +245,62 @@ component that can own one. Close adapters before destroying a shared context.
 Configuration remains in `polaris.yaml` or SDK `Configuration` objects; framework
 settings are code options.
 
+## LangGraph
+
+```python
+from polaris_ai.langgraph import (
+    LangGraphTransport,
+    PolarisLangGraphContext,
+    PolarisLangGraphRegistrar,
+    PolarisLangGraphResolver,
+    PolarisRemoteGraph,
+)
+
+with PolarisLangGraphContext.from_address(
+    "127.0.0.1:8091",
+    "production",
+) as polaris, PolarisLangGraphRegistrar(
+    polaris.context,
+    "production",
+) as registrar, PolarisLangGraphResolver(
+    polaris.context,
+    "production",
+) as resolver:
+    registrar.register(
+        "review-service",
+        [LangGraphTransport("10.0.0.8", 8123, "/api", graph_id="review-graph")],
+    )
+    with PolarisRemoteGraph(
+        resolver,
+        "review-graph",
+        service="review-service",
+    ) as graph:
+        result = graph.invoke(
+            {"messages": []},
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+```
+
+The registrar writes `langgraph.graph-id`, `langgraph.path`, and
+`langgraph.protocol` metadata to an ordinary Polaris instance. The resolver
+selects a healthy, non-isolated instance for the requested graph, prefers the
+previous `host:port`, and reuses the last endpoint when discovery temporarily
+fails.
+
+`PolarisRemoteGraph` exposes `invoke`, `ainvoke`, `stream`, and `astream`.
+Each call refreshes discovery and reports `instance_type="langgraph"` to Polaris
+without changing LangGraph's result or exception. The native `RemoteGraph`
+client is reused until the selected URL changes.
+
+`PolarisLangGraphConfig.from_env()` reads `POLARIS_AI_LANGGRAPH_*` first and
+accepts `POLARIS_SERVER_ADDRESS`, `POLARIS_TOKEN`,
+`POLARIS_SERVICE_TOKEN`, and `POLARIS_NAMESPACE` as fallbacks.
+
 ## Validation
 
 ```bash
-python -m pytest
-python -m build
+uv run python -m pytest
+uv build
 ./examples/verify.sh
 ./examples/verify.sh --only agentscope/a2a/skill
 ./examples/verify.sh --only agentscope/mcp
@@ -255,6 +316,5 @@ Offline example verification uses real SDK contexts and AgentScope, replacing
 only Polaris RPC calls. Real-registry verification is explicitly enabled through
 `verify_e2e.sh`. See [examples/test.md](examples/test.md) for prerequisites,
 per-run logs, assertions and cleanup, and [AgentScope examples](examples/agentscope/README.md)
-for manual commands.
-LangGraph, real MCP Server E2E, remote governance and Skill write operations are
-not part of the current AgentScope implementation.
+for manual commands. Real MCP Server E2E, remote controller governance, and
+Skill write operations remain outside the current example coverage.

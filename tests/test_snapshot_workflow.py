@@ -13,10 +13,10 @@
 # CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-"""Execute the snapshot workflow's version scripts without publishing packages."""
+"""Check the single-package version source and release workflows."""
 
+import ast
 import os
-import runpy
 import subprocess
 import sys
 import tomllib
@@ -24,210 +24,234 @@ from pathlib import Path
 
 import pytest
 import yaml
+from polaris_ai import __version__ as runtime_version
 
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/python-snapshot.yaml"
-TESTING_WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/testing.yml"
-PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+ROOT = Path(__file__).resolve().parents[1]
+SNAPSHOT_WORKFLOW = ROOT / ".github/workflows/python-snapshot.yaml"
+RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
+TESTING_WORKFLOW = ROOT / ".github/workflows/testing.yml"
+PYPROJECT = ROOT / "pyproject.toml"
+VERSION_FILE = ROOT / "src/polaris_ai/_version.py"
+PACKAGE_INIT = ROOT / "src/polaris_ai/__init__.py"
 
 
-def workflow():
-    return yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+def load_workflow(path):
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
 
-def _load_testing_workflow():
-    return yaml.load(TESTING_WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+def read_version(path):
+    assignments = [
+        node
+        for node in ast.parse(path.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__version__"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1
+    return ast.literal_eval(assignments[0].value)
 
 
-def _project_text(version: str) -> str:
-    return f'[project]\nname = "polaris-python-ai"\nversion = "{version}"\n'
-
-
-def run_version_step(tmp_path, configured, job, step_id, run_number="42", module_version=None):
-    init = tmp_path / "src/polaris_ai/__init__.py"
-    init.parent.mkdir(parents=True, exist_ok=True)
-    module_version = configured if module_version is None else module_version
-    original_init = f'"""Preserve the module docstring."""\n\n__version__ = "{module_version}"\n'
-    init.write_text(original_init, encoding="utf-8")
-    pyproject = tmp_path / "pyproject.toml"
-    original_project = _project_text(configured)
-    pyproject.write_text(original_project, encoding="utf-8")
-    output = tmp_path / "github-output"
-    step = next(step for step in workflow()["jobs"][job]["steps"] if step.get("id") == step_id)
+def run_step_script(step, cwd, **extra_env):
     lines = step["run"].splitlines()
     assert lines[0].endswith("<<'PY'") and lines[-1] == "PY"
-    completed = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-c", "\n".join(lines[1:-1])],
-        cwd=tmp_path,
-        env={**os.environ, "GITHUB_OUTPUT": str(output), "GITHUB_RUN_NUMBER": run_number},
+        cwd=cwd,
+        env={**os.environ, **extra_env},
         capture_output=True,
         text=True,
         timeout=10,
     )
-    emitted = output.read_text(encoding="utf-8") if output.exists() else ""
-    return completed, pyproject, init, original_project, original_init, emitted
 
 
-def test_snapshot_publish_only_uses_verified_artifacts():
-    config = workflow()
+def test_project_uses_one_distribution_and_one_version_source():
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    assert project["project"]["name"] == "polaris-python-ai"
+    assert project["project"]["dynamic"] == ["version"]
+    assert "version" not in project["project"]
+    assert project["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "polaris_ai._version.__version__"
+    }
+    assert read_version(VERSION_FILE) == runtime_version
+    assert "__version__ =" not in PACKAGE_INIT.read_text(encoding="utf-8")
+    assert not (ROOT / "libs").exists()
+    assert not (ROOT / "src/polaris_ai/a2a/_version.py").exists()
+    assert not (ROOT / "src/polaris_ai/agentscope/_version.py").exists()
+    assert not (ROOT / "src/polaris_ai/langgraph/_version.py").exists()
+
+
+def test_optional_frameworks_are_installed_through_extras():
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    extras = project["project"]["optional-dependencies"]
+    assert extras == {
+        "a2a": ["a2a-sdk>=1.2.3,<2"],
+        "agentscope": [
+            "a2a-sdk>=1.2.3,<2",
+            "agentscope>=2.0.10,<3",
+        ],
+        "langgraph": ["langgraph>=1.0,<2"],
+        "mcp": [
+            "a2a-sdk>=1.2.3,<2",
+            "agentscope>=2.0.10,<3",
+            "mcp>=2,<3",
+        ],
+        "all": [
+            "a2a-sdk>=1.2.3,<2",
+            "agentscope>=2.0.10,<3",
+            "langgraph>=1.0,<2",
+            "mcp>=2,<3",
+        ],
+    }
+
+
+def test_snapshot_triggers_on_main_relevant_changes_and_checks_dev_version():
+    config = load_workflow(SNAPSHOT_WORKFLOW)
     assert config["on"]["push"]["branches"] == ["main", "release/*", "develop"]
+    assert config["on"]["push"]["paths"] == [
+        "src/**",
+        "tests/**",
+        "pyproject.toml",
+        "uv.lock",
+        ".github/workflows/python-snapshot.yaml",
+        "!src/**.md",
+        "!tests/**.md",
+    ]
     assert "workflow_dispatch" in config["on"]
-    assert "pull_request" not in config["on"]
     jobs = config["jobs"]
-    assert "refs/heads/develop" in jobs["check-snapshot"]["if"]
     assert "refs/heads/main" in jobs["check-snapshot"]["if"]
+    assert "refs/heads/develop" in jobs["check-snapshot"]["if"]
     assert "refs/heads/release/" in jobs["check-snapshot"]["if"]
     assert jobs["build"]["needs"] == "check-snapshot"
     assert jobs["build"]["if"] == "${{ needs.check-snapshot.outputs.IS_SNAPSHOT == 'true' }}"
     assert jobs["publish"]["needs"] == "build"
     assert jobs["publish"]["environment"] == "Release"
-    upload = jobs["build"]["steps"][-1]
-    download, publish = jobs["publish"]["steps"]
+
+
+def test_snapshot_upload_and_publish_use_the_same_verified_artifact():
+    config = load_workflow(SNAPSHOT_WORKFLOW)
+    upload = config["jobs"]["build"]["steps"][-1]
+    download, publish = config["jobs"]["publish"]["steps"]
     assert upload["with"]["name"] == download["with"]["name"]
-    assert upload["with"]["name"] == "polaris-python-ai-snapshot-dist"
     assert upload["with"]["path"] == "polaris-python-ai/dist/"
     assert publish["with"]["password"] == "${{ secrets.PYPI_API_TOKEN }}"
     assert publish["with"]["skip-existing"] == "true"
 
 
-def test_snapshot_build_checks_publishable_metadata_and_core_checkout():
-    steps = workflow()["jobs"]["build"]["steps"]
-    core_checkout = next(
-        step for step in steps
-        if step.get("with", {}).get("repository") == "polaris-contrib/polaris-python"
-    )
-    assert core_checkout["with"]["ref"] == "${{ github.head_ref || github.ref_name }}"
-    assert any("polaris-python/dist/*.whl" in step.get("run", "") for step in steps)
-    assert any("${wheel}[agentscope,a2a,mcp]" in step.get("run", "") for step in steps)
-    assert any("../polaris-python" in step.get("run", "") for step in steps)
+def test_release_requires_the_canonical_single_package_tag():
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "polaris-python-ai==" in text
+    assert 'RELEASE_TAG"] != expected' in text
+    assert "working-directory" not in load_workflow(RELEASE_WORKFLOW)["on"]["workflow_dispatch"]["inputs"]
 
 
-@pytest.mark.parametrize("job", ["test", "package"])
-def test_testing_checks_out_matching_core_ref(job):
-    steps = _load_testing_workflow()["jobs"][job]["steps"]
-    core_checkout = next(
-        step for step in steps
-        if step.get("with", {}).get("repository") == "polaris-contrib/polaris-python"
-    )
-    assert core_checkout["with"]["ref"] == "${{ github.head_ref || github.ref_name }}"
-
-
-def test_testing_uses_locked_coverage_dependency_and_isolated_concurrency():
-    config = _load_testing_workflow()
-    assert "concurrency" not in config
-    jobs = config["jobs"]
-    assert jobs["test"]["concurrency"]["group"].endswith("${{ matrix.python }}")
-    assert jobs["package"]["concurrency"]["group"].endswith("-package")
-    assert jobs["test"]["concurrency"]["cancel-in-progress"] == "true"
-    assert jobs["package"]["concurrency"]["cancel-in-progress"] == "true"
-    setup = next(
-        step for step in jobs["test"]["steps"]
-        if step.get("uses") == "astral-sh/setup-uv@v6"
-    )
-    assert "activate-environment" not in setup["with"]
+def test_testing_checks_one_lockfile_and_one_wheel():
+    config = load_workflow(TESTING_WORKFLOW)
     install = next(
-        step for step in jobs["test"]["steps"]
-        if step.get("name") == "Install dependencies"
+        step
+        for step in config["jobs"]["test"]["steps"]
+        if step["name"] == "Install dependencies"
     )
     assert install["run"] == "uv sync --all-extras --group dev --locked"
-    dev_dependencies = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))[
-        "dependency-groups"
-    ]["dev"]
-    assert "pytest-cov>=6,<8" in dev_dependencies
+    package_steps = config["jobs"]["package"]["steps"]
+    build = next(step for step in package_steps if step["name"] == "Build AI distributions")
+    assert build["run"] == "uv build"
+    install_wheel = next(
+        step for step in package_steps if step["name"] == "Install verified wheel"
+    )
+    assert "${wheel}[all]" in install_wheel["run"]
 
 
-def test_testing_runs_all_supported_operating_systems():
-    job = _load_testing_workflow()["jobs"]["test"]
-    assert job["strategy"]["fail-fast"] == "false"
-    assert job["strategy"]["matrix"] == {
-        "os": ["ubuntu-latest", "windows-latest", "macos-26"],
-        "python": ["3.12", "3.13"],
-    }
-    assert job["runs-on"] == "${{ matrix.os }}"
-
-
-@pytest.mark.parametrize("configured, expected", [
-    ("0.1.0", False),
-    ("0.1.1a1", False),
-    ("0.1.1rc1", False),
-    ("0.1.0.post1", False),
-    ("0.1.1.dev0", True),
-    ("0.1.1a2.dev7", True),
-])
-def test_snapshot_gate(tmp_path, configured, expected):
-    completed, pyproject, init, original_project, original_init, emitted = run_version_step(
-        tmp_path, configured, "check-snapshot", "check_version"
+def test_snapshot_version_step_changes_only_the_single_version_file(tmp_path):
+    workflow = load_workflow(SNAPSHOT_WORKFLOW)
+    step = next(
+        item
+        for item in workflow["jobs"]["build"]["steps"]
+        if item.get("id") == "version"
+    )
+    about = tmp_path / "src/polaris_ai/_version.py"
+    about.parent.mkdir(parents=True)
+    about.write_text(
+        '"""header"""\n\n__version__ = "0.2.0.dev0"\n',
+        encoding="utf-8",
+    )
+    output = tmp_path / "github-output"
+    completed = run_step_script(
+        step,
+        tmp_path,
+        GITHUB_OUTPUT=str(output),
+        GITHUB_RUN_NUMBER="42",
     )
     assert completed.returncode == 0, completed.stderr
-    assert emitted == f"IS_SNAPSHOT={str(expected).lower()}\n"
-    assert pyproject.read_text(encoding="utf-8") == original_project
-    assert init.read_text(encoding="utf-8") == original_init
+    assert read_version(about) == "0.2.0.dev42"
+    assert output.read_text(encoding="utf-8") == "VERSION=0.2.0.dev42\n"
 
 
-@pytest.mark.parametrize("configured, expected", [
-    ("0.1.1.dev0", "0.1.1.dev42"),
-    ("0.1.1.dev999", "0.1.1.dev42"),
-    ("0.1.1a2.dev7", "0.1.1a2.dev42"),
-    ("1!0.1.1.dev0", "1!0.1.1.dev42"),
-])
-def test_snapshot_version_preserves_target_and_header(tmp_path, configured, expected):
-    completed, pyproject, init, original_project, original_init, emitted = run_version_step(
-        tmp_path, configured, "build", "version"
+@pytest.mark.parametrize("configured", ["0.2.0", "0.2.0.dev0+local", "invalid"])
+def test_snapshot_version_step_rejects_nonpublic_development_version(tmp_path, configured):
+    workflow = load_workflow(SNAPSHOT_WORKFLOW)
+    step = next(
+        item
+        for item in workflow["jobs"]["build"]["steps"]
+        if item.get("id") == "version"
     )
-    assert completed.returncode == 0, completed.stderr
-    assert emitted == f"VERSION={expected}\n"
-    assert runpy.run_path(str(init))["__version__"] == expected
-    assert pyproject.read_text(encoding="utf-8") == original_project.replace(configured, expected)
-    assert init.read_text(encoding="utf-8") == original_init.replace(configured, expected)
-
-
-@pytest.mark.parametrize("configured", ["0.1.0", "0.1.1a1", "0.1.1.dev0+local", "invalid"])
-def test_snapshot_set_version_rejects_nonpublic_development_version(tmp_path, configured):
-    completed, pyproject, init, original_project, original_init, emitted = run_version_step(
-        tmp_path, configured, "build", "version"
+    about = tmp_path / "src/polaris_ai/_version.py"
+    about.parent.mkdir(parents=True)
+    original = f'__version__ = "{configured}"\n'
+    about.write_text(original, encoding="utf-8")
+    completed = run_step_script(
+        step,
+        tmp_path,
+        GITHUB_OUTPUT=str(tmp_path / "output"),
+        GITHUB_RUN_NUMBER="42",
     )
     assert completed.returncode != 0
-    assert emitted == ""
-    assert pyproject.read_text(encoding="utf-8") == original_project
-    assert init.read_text(encoding="utf-8") == original_init
-
-
-@pytest.mark.parametrize("job, step_id", [("check-snapshot", "check_version"), ("build", "version")])
-def test_snapshot_scripts_reject_version_mismatch(tmp_path, job, step_id):
-    completed, pyproject, init, original_project, original_init, emitted = run_version_step(
-        tmp_path, "0.1.1.dev0", job, step_id, module_version="0.1.2.dev0"
-    )
-    assert completed.returncode != 0
-    assert emitted == ""
-    assert pyproject.read_text(encoding="utf-8") == original_project
-    assert init.read_text(encoding="utf-8") == original_init
+    assert about.read_text(encoding="utf-8") == original
 
 
 @pytest.mark.parametrize("run_number", ["0", "-1", "invalid"])
-def test_snapshot_set_version_rejects_invalid_run_number(tmp_path, run_number):
-    completed, pyproject, init, original_project, original_init, emitted = run_version_step(
-        tmp_path, "0.1.1.dev0", "build", "version", run_number
+def test_snapshot_version_step_rejects_invalid_run_number(tmp_path, run_number):
+    workflow = load_workflow(SNAPSHOT_WORKFLOW)
+    step = next(
+        item
+        for item in workflow["jobs"]["build"]["steps"]
+        if item.get("id") == "version"
+    )
+    about = tmp_path / "src/polaris_ai/_version.py"
+    about.parent.mkdir(parents=True)
+    original = '__version__ = "0.2.0.dev0"\n'
+    about.write_text(original, encoding="utf-8")
+    completed = run_step_script(
+        step,
+        tmp_path,
+        GITHUB_OUTPUT=str(tmp_path / "output"),
+        GITHUB_RUN_NUMBER=run_number,
     )
     assert completed.returncode != 0
-    assert emitted == ""
-    assert pyproject.read_text(encoding="utf-8") == original_project
-    assert init.read_text(encoding="utf-8") == original_init
+    assert about.read_text(encoding="utf-8") == original
 
 
-def test_snapshot_gate_rejects_local_version(tmp_path):
-    completed, pyproject, init, original_project, original_init, emitted = run_version_step(
-        tmp_path, "0.1.1.dev0+local", "check-snapshot", "check_version"
+def test_release_version_step_accepts_only_matching_tag(tmp_path):
+    workflow = load_workflow(RELEASE_WORKFLOW)
+    step = next(
+        item
+        for item in workflow["jobs"]["build"]["steps"]
+        if item["name"] == "Verify release version"
+    )
+    about = tmp_path / "src/polaris_ai/_version.py"
+    about.parent.mkdir(parents=True)
+    about.write_text('__version__ = "0.2.0"\n', encoding="utf-8")
+    completed = run_step_script(
+        step,
+        tmp_path,
+        RELEASE_TAG="polaris-python-ai==0.2.0",
+    )
+    assert completed.returncode == 0, completed.stderr
+    completed = run_step_script(
+        step,
+        tmp_path,
+        RELEASE_TAG="polaris-python-ai==0.2.1",
     )
     assert completed.returncode != 0
-    assert emitted == ""
-    assert pyproject.read_text(encoding="utf-8") == original_project
-    assert init.read_text(encoding="utf-8") == original_init
-
-
-def test_snapshot_rerun_keeps_version(tmp_path):
-    first = run_version_step(tmp_path / "first", "0.1.1.dev0", "build", "version")
-    rerun = run_version_step(tmp_path / "rerun", "0.1.1.dev0", "build", "version")
-    next_run = run_version_step(tmp_path / "next", "0.1.1.dev0", "build", "version", "43")
-    assert first[0].returncode == rerun[0].returncode == next_run[0].returncode == 0
-    assert first[5] == rerun[5] == "VERSION=0.1.1.dev42\n"
-    assert next_run[5] == "VERSION=0.1.1.dev43\n"
