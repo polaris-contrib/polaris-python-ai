@@ -7,8 +7,13 @@ Consumer 从实例元数据解析 AgentCard，调用 AgentScope 原生 A2AAgent�
 ./examples/verify.sh --only agentscope/a2a
 ./examples/verify_e2e.sh --only agentscope/a2a
 ./examples/verify.sh --only agentscope/a2a/skill
+./examples/verify.sh --only agentscope/a2a/streaming_provider
+./examples/verify.sh --only agentscope/a2a/state_resume
 ```
 
-真实验证需 `POLARIS_SERVER_ADDRESS` 和 `POLARIS_SERVICE_TOKEN`。
+该目录还包含流式 Tool Calling Provider、`launch_console` Consumer 和
+`A2AAgentState` 会话恢复示例。
+
+真实验证需 `POLARIS_SERVER_ADDRESS`，服务 token 可为空。
 使用唯一服务名、本机动态端口和 TTL 1 秒，验证注册、发现、调用和退出反注册。
 细节见 [test.md](test.md)。

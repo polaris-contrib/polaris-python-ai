@@ -9,6 +9,9 @@ uv sync --all-extras
 ./examples/verify.sh --only agentscope/a2a/skill
 ./examples/verify.sh --only agentscope/mcp
 ./examples/verify.sh --only agentscope/runtime
+./examples/verify.sh --only agentscope/a2a/streaming_provider
+./examples/verify.sh --only agentscope/mcp/agent
+./examples/verify.sh --only agentscope/agent_service
 ```
 
 The scripts select `POLARIS_PYTHON`, then the project's `.venv/bin/python`,
@@ -17,6 +20,8 @@ then uv or python3. They resolve paths independently of the current directory.
 Offline verification uses the real SDK, native AgentScope Toolkit and A2AAgent.
 Only the Polaris gRPC boundary is replaced. A2A runs a model-free local
 JSON-RPC/SSE server on a dynamic port. No model credentials are required.
+The newer examples also cover MCP Tool calls, A2A state resume, Skill console
+agents, multi-Agent Runtime reuse and a small FastAPI Agent service.
 
 For a real registry:
 

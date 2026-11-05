@@ -10,3 +10,6 @@ python -m examples.agentscope.mcp.main \
 
 `--connect` 会执行原生 MCP 握手和 `tools/list`；不传时只验证注册中心 metadata 和
 契约过滤。
+
+[agent](agent/) 示例还会启动自包含的 Streamable HTTP MCP Server，注册到
+Polaris，并通过 Agent 实际调用 Tool。

@@ -8,5 +8,7 @@ service metadata and load only mounts in the selected namespace.
 ./examples/verify_e2e.sh --only agentscope/skill
 ```
 
-Real verification requires an existing published Skill in `POLARIS_SKILL_NAME`
-and a service with mounts in `POLARIS_AGENT_SERVICE`. See [test.md](test.md).
+The [console_agent](console_agent/) example adds an interactive Agent with
+dynamic Skill refresh. Set `POLARIS_SKILL_NAME` to choose a published Skill;
+otherwise the newer verifier selects the first Skill in the namespace. Mounted
+verification still requires `POLARIS_AGENT_SERVICE`. See [test.md](test.md).

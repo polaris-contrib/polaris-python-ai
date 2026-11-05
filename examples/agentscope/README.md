@@ -19,6 +19,18 @@ it, and invoke two turns.
 `agentscope/runtime` composes Skill, A2A, optional MCP and AI category logging
 through `PolarisAgentConfig` and `PolarisAgentRuntime`.
 
+Additional runnable demos:
+
+- `a2a/streaming_provider`: one Agent per A2A context with streamed Tool output.
+- `a2a/console_consumer`: Polaris discovery plus AgentScope `launch_console`.
+- `a2a/state_resume`: persist and resume `A2AAgentState`.
+- `mcp/agent`: self-contained MCP Server, Polaris registration and real Tool call.
+- `skill/console_agent`: interactive Agent with dynamically refreshed Skills.
+- `runtime/multi_agent`: two isolated Agents sharing one Runtime and Skill snapshot.
+- `agent_service`: a small FastAPI `/health` and `/chat` service around an Agent.
+
+These demos use deterministic local models, so they need no model API key.
+
 ## Published Skills
 
 ```bash
@@ -62,9 +74,9 @@ Add `--skill-source published --skill-name weather`, or
 Agent. It answers `/skill-list`, `/skill <name>`, and otherwise echoes the input.
 
 Every example accepts `--config`, `--address`, `--skill-address`, `--timeout`
-and `--namespace`. Without a file,
-SDK defaults and code options are used. The Skill connector inherits the ordinary
-server address with the Skill port unless configured explicitly in `polaris.yaml`.
+and `--namespace`. Without a file, SDK defaults and code options are used.
+When `--address` is set, examples explicitly inherit the host for the Skill
+connector on port `8094` unless `--skill-address` overrides it.
 
 ## Local Regression Checks
 

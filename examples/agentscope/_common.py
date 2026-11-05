@@ -53,10 +53,17 @@ def context(args, *, entry=None, component=None):
     config.set_default()
     if args.address:
         config.global_config.server_connector.addresses = [args.address]
-    if args.skill_address:
-        config.get_ai().get_skill().get_server_connector().addresses = [args.skill_address]
+    skill_address = args.skill_address
+    if not skill_address and args.address:
+        from polaris.pkg.model.util import get_ip_from_int_with_port
+
+        host, _ = get_ip_from_int_with_port(args.address)
+        skill_address = f"{host}:8094"
+    if skill_address:
+        config.get_ai().get_skill().get_server_connector().addresses = [skill_address]
     if args.timeout is not None:
         config.get_global().get_api().timeout = args.timeout
+    config.get_global().get_admin().port = int(os.environ.get("POLARIS_DEMO_ADMIN_PORT", "0"))
     if os.environ.get("POLARIS_DEMO_OFFLINE") == "1":
         config.get_global().get_api().bind_ip = "127.0.0.1"
         config.get_global().get_stat_reporter().enable = False

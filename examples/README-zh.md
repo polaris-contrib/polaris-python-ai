@@ -9,6 +9,9 @@ uv sync --all-extras
 ./examples/verify.sh --only agentscope/a2a/skill
 ./examples/verify.sh --only agentscope/mcp
 ./examples/verify.sh --only agentscope/runtime
+./examples/verify.sh --only agentscope/a2a/streaming_provider
+./examples/verify.sh --only agentscope/mcp/agent
+./examples/verify.sh --only agentscope/agent_service
 ```
 
 脚本优先使用 `POLARIS_PYTHON`，其次使用项目 `.venv/bin/python`，
@@ -16,6 +19,8 @@ uv sync --all-extras
 
 离线验证使用真实 SDK、AgentScope Toolkit 和 A2AAgent，只替换 Polaris
 gRPC 边界。A2A 启动本机动态端口的 JSON-RPC/SSE Echo 服务，无需模型密钥。
+新增示例还覆盖 MCP Tool、A2A 会话恢复、Skill Console、多 Agent Runtime
+共享和精简 FastAPI Agent Service。
 
 真实 Polaris 验证：
 

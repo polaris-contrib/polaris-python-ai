@@ -77,13 +77,23 @@ def test_group_selection_accepts_nested_names_and_rejects_unknown():
     assert manager.verification_targets("", "agentscope/skill") == [
         "agentscope/skill/published",
         "agentscope/skill/mounted",
+        "agentscope/skill/console_agent",
     ]
     assert manager.verification_targets("agentscope", "a2a") == [
         "agentscope/a2a",
+        "agentscope/a2a/streaming_provider",
+        "agentscope/a2a/console_consumer",
+        "agentscope/a2a/state_resume",
         "agentscope/a2a/skill",
     ]
-    assert manager.verification_targets("agentscope", "mcp") == ["agentscope/mcp"]
-    assert manager.verification_targets("agentscope", "runtime") == ["agentscope/runtime"]
+    assert manager.verification_targets("agentscope", "mcp") == [
+        "agentscope/mcp",
+        "agentscope/mcp/agent",
+    ]
+    assert manager.verification_targets("agentscope", "runtime") == [
+        "agentscope/runtime",
+        "agentscope/runtime/multi_agent",
+    ]
     assert manager.verification_targets("agentscope/a2a", "skill") == ["agentscope/a2a/skill"]
     assert manager.verification_targets("", "agentscope/a2a/provider") == [
         "agentscope/a2a/provider"
@@ -191,9 +201,6 @@ def test_verification_tee_preserves_standard_stream_methods():
 @pytest.mark.parametrize(
     "demo,variable",
     [
-        ("a2a", "POLARIS_SERVICE_TOKEN"),
-        ("skill-a2a", "POLARIS_SERVICE_TOKEN"),
-        ("published", "POLARIS_SKILL_NAME"),
         ("mounted", "POLARIS_AGENT_SERVICE"),
         ("mcp", "POLARIS_MCP_SERVICE"),
     ],
@@ -210,9 +217,21 @@ def test_real_checks_require_scenario_fixtures(demo, variable):
         with pytest.raises(ValueError, match=variable):
             required_environment(demo)
         os.environ[variable] = "fixture"
-        if demo == "skill-a2a":
-            os.environ["POLARIS_SKILL_NAME"] = "weather"
         assert required_environment(demo)[0] == "registry:8091"
+
+
+def test_real_checks_accept_registry_without_service_token():
+    pytest.importorskip("agentscope.tool")
+    pytest.importorskip("a2a.server.routes")
+    from examples._internal._verify import required_environment
+
+    with patch.dict(
+        os.environ,
+        {"POLARIS_SERVER_ADDRESS": "registry:8091"},
+        clear=True,
+    ):
+        assert required_environment("a2a") == ("registry:8091", "")
+        assert required_environment("skill-console") == ("registry:8091", "")
 
 
 def test_real_event_endpoint_handles_ipv6_and_sdk_service_token_priority():
@@ -246,7 +265,10 @@ def test_remote_cleanup_filters_ai_prefix_and_namespace(monkeypatch):
                 {
                     "code": 200000,
                     "services": [
-                        {"namespace": "python-agentscope-e2e", "name": "polaris-python-ai-e2e-agent"},
+                        {
+                            "namespace": "python-agentscope-e2e",
+                            "name": "polaris-python-ai-e2e-agent",
+                        },
                         {"namespace": "python-agentscope-e2e", "name": "polaris-python-e2e-agent"},
                         {"namespace": "python-agentscope-e2e", "name": "mounted-agent"},
                         {"namespace": "other", "name": "polaris-python-ai-e2e-agent"},
@@ -258,6 +280,42 @@ def test_remote_cleanup_filters_ai_prefix_and_namespace(monkeypatch):
     monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "python-agentscope-e2e")
     monkeypatch.setattr(manager.urllib.request, "urlopen", lambda *args, **kwargs: Response())
     assert manager.test_services()[2] == ["polaris-python-ai-e2e-agent"]
+
+
+def test_remote_service_deletion_deregisters_stale_instances_first(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return json.dumps({"code": 200000, "responses": []}).encode()
+
+    def deregister(address, namespace, names, token):
+        calls.append((address, namespace, tuple(names), token))
+        return 2
+
+    monkeypatch.setenv("POLARIS_E2E_SERVICE_TOKEN", "service-token")
+    monkeypatch.setattr(manager, "deregister_test_instances", deregister)
+    monkeypatch.setattr(manager.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+
+    assert manager.delete_test_services(
+        "http://registry:8090",
+        "python-agentscope-e2e",
+        ["polaris-python-ai-e2e-service"],
+    ) == ["polaris-python-ai-e2e-service"]
+    assert calls == [
+        (
+            "http://registry:8090",
+            "python-agentscope-e2e",
+            ("polaris-python-ai-e2e-service",),
+            "service-token",
+        )
+    ]
 
 
 @pytest.mark.parametrize("name", sorted(set(manager.VERIFIERS) | set(manager.GROUPS)))

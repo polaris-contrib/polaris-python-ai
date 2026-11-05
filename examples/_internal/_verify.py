@@ -35,16 +35,25 @@ sys.path[:0] = [str(REPO / "src"), str(REPO)]
 
 from agentscope.tool import Toolkit
 from polaris.api.consumer import ConsumerAPI
+from polaris.api.skill import SkillAPI
 from polaris.pkg.model.error import SDKError
 from polaris.pkg.model.service import GetAllInstancesRequest
+from polaris.pkg.model.skill import SkillListRequest
 
 from examples._internal._runtime import e2e_namespace, get_local_host, verification_directory
 from examples._internal._stub import RegistryStub, offline_registry
 from examples.agentscope import _common
+from examples.agentscope.a2a.console_consumer import main as console_consumer_demo
 from examples.agentscope.a2a.consumer import main as consumer_demo
 from examples.agentscope.a2a.provider import main as provider_demo
+from examples.agentscope.a2a.state_resume import main as state_resume_demo
+from examples.agentscope.a2a.streaming_provider import main as streaming_provider_demo
+from examples.agentscope.agent_service import main as agent_service_demo
 from examples.agentscope.mcp import main as mcp_demo
+from examples.agentscope.mcp.agent import main as mcp_agent_demo
 from examples.agentscope.runtime import main as runtime_demo
+from examples.agentscope.runtime.multi_agent import main as runtime_multi_demo
+from examples.agentscope.skill.console_agent import main as skill_console_demo
 from examples.agentscope.skill.mounted import main as mounted_demo
 from examples.agentscope.skill.published import main as published_demo
 from polaris_ai.agentscope import PolarisSkillLoader
@@ -58,10 +67,6 @@ def required_environment(demo):
         raise ValueError("POLARIS_SERVER_ADDRESS is required for real-service verification")
     address = address.split(",", 1)[0].strip()
     token = os.getenv("POLARIS_E2E_SERVICE_TOKEN") or os.getenv("POLARIS_SERVICE_TOKEN", "")
-    if demo in ("a2a", "skill-a2a") and not token:
-        raise ValueError("POLARIS_SERVICE_TOKEN or POLARIS_E2E_SERVICE_TOKEN is required")
-    if demo in ("published", "skill-a2a", "runtime") and not os.getenv("POLARIS_SKILL_NAME"):
-        raise ValueError("POLARIS_SKILL_NAME must identify a published Skill")
     if demo == "mounted" and not os.getenv("POLARIS_AGENT_SERVICE"):
         raise ValueError("POLARIS_AGENT_SERVICE must identify a service with mounted Skills")
     if demo == "mcp" and not os.getenv("POLARIS_MCP_SERVICE"):
@@ -88,8 +93,8 @@ def scenario_environment(address):
     }
 
 
-def service_name():
-    return f"polaris-python-ai-e2e-agentscope-a2a-{time.time_ns()}-{uuid.uuid4().hex[:6]}"
+def service_name(kind="a2a"):
+    return f"polaris-python-ai-e2e-agentscope-{kind}-{time.time_ns()}-{uuid.uuid4().hex[:6]}"
 
 
 def sdk_arguments(address, namespace):
@@ -97,6 +102,42 @@ def sdk_arguments(address, namespace):
     if os.getenv("POLARIS_DEMO_OFFLINE") != "1" and (configured := os.getenv("POLARIS_E2E_CONFIG")):
         arguments += ["--config", configured]
     return arguments
+
+
+async def real_skill_reference(address, namespace, *, entry, service_name=""):
+    """Resolve the published Skill selected for a real E2E scenario."""
+    configured = os.getenv("POLARIS_SKILL_NAME", "").strip()
+    if configured:
+        return configured, os.getenv("POLARIS_SKILL_VERSION", "").strip()
+    args = _common.parser("Skill probe").parse_args(sdk_arguments(address, namespace))
+    sdk = _common.context(args, entry=entry, component="skill-probe")
+    try:
+        if service_name:
+            async with PolarisSkillLoader(
+                sdk,
+                namespace,
+                service_name=service_name,
+            ) as loader:
+                skills = await loader.list_skills()
+            if not skills:
+                raise AssertionError(f"No mounted Skill is available on {namespace}/{service_name}")
+            return skills[0].name, ""
+        response = await SkillAPI(sdk).async_list_skills(
+            SkillListRequest(
+                namespace=namespace,
+                offset=0,
+                limit=50,
+                timeout=5000,
+            )
+        )
+    finally:
+        await asyncio.to_thread(sdk.destroy)
+    resources = [item for item in (response.resources or ()) if item.name.strip()]
+    if not resources:
+        raise AssertionError(f"No published Skill is available in {namespace}")
+    selected = resources[0]
+    version = selected.version_info.active_version if selected.version_info is not None else ""
+    return selected.name, version
 
 
 def assert_ai_logs(*categories):
@@ -253,10 +294,223 @@ async def verify_a2a(
     }
 
 
+async def verify_streaming_provider(address, namespace, token, stub):
+    name = service_name("streaming-a2a")
+    host = get_local_host(address) if stub is None else "127.0.0.1"
+    args = sdk_arguments(address, namespace)
+    provider = asyncio.create_task(
+        streaming_provider_demo.main(
+            [
+                *args,
+                "--service",
+                name,
+                "--service-token",
+                token,
+                "--host",
+                host,
+                "--port",
+                "0",
+                "--ttl",
+                "1",
+            ]
+        )
+    )
+    probe = None
+    instance_id = None
+    try:
+        probe = _common.context(
+            _common.parser("Streaming probe").parse_args(args),
+            component="streaming-probe",
+        )
+        consumer = ConsumerAPI(probe)
+
+        async def registered():
+            snapshot = await consumer.async_get_all_instances(
+                GetAllInstancesRequest(
+                    namespace=namespace,
+                    service=name,
+                    timeout=1000,
+                )
+            )
+            return next(
+                (
+                    instance
+                    for instance in snapshot.get_instances()
+                    if instance.is_healthy() and not instance.is_isolated()
+                ),
+                None,
+            )
+
+        instance = await eventually(registered, task=provider)
+        instance_id = instance.get_id()
+        replies = await console_consumer_demo.main(
+            [
+                *args,
+                "--service",
+                name,
+                "--message",
+                "weather in Shanghai",
+                "--message",
+                "12 + 30",
+            ]
+        )
+        assert isinstance(replies, list) and len(replies) == 2
+        assert "Sunny" in replies[0] and "Shanghai" in replies[0]
+        assert "42" in replies[1]
+    finally:
+        provider.cancel()
+        try:
+            with contextlib.suppress(asyncio.CancelledError):
+                await provider
+            if probe is not None and instance_id is not None:
+                consumer = ConsumerAPI(probe)
+
+                async def deregistered():
+                    snapshot = await consumer.async_get_all_instances(
+                        GetAllInstancesRequest(
+                            namespace=namespace,
+                            service=name,
+                            timeout=1000,
+                        )
+                    )
+                    return all(
+                        instance.get_id() != instance_id for instance in snapshot.get_instances()
+                    )
+
+                await eventually(deregistered)
+        finally:
+            if probe is not None:
+                await asyncio.to_thread(probe.destroy)
+    return {
+        "service": name,
+        "instance_id": instance_id,
+        "replies": replies,
+        "streamed_tools": True,
+        "deregistered": True,
+    }
+
+
+async def verify_state_resume(address, namespace, token, stub):
+    name = service_name("state-resume")
+    host = get_local_host(address) if stub is None else "127.0.0.1"
+    args = sdk_arguments(address, namespace)
+    provider = asyncio.create_task(
+        streaming_provider_demo.main(
+            [
+                *args,
+                "--service",
+                name,
+                "--service-token",
+                token,
+                "--host",
+                host,
+                "--port",
+                "0",
+                "--ttl",
+                "1",
+            ]
+        )
+    )
+    probe = None
+    instance_id = None
+    state_file = Path.cwd() / "a2a-state.json"
+    try:
+        probe = _common.context(
+            _common.parser("State probe").parse_args(args),
+            component="state-probe",
+        )
+        consumer = ConsumerAPI(probe)
+
+        async def registered():
+            snapshot = await consumer.async_get_all_instances(
+                GetAllInstancesRequest(
+                    namespace=namespace,
+                    service=name,
+                    timeout=1000,
+                )
+            )
+            return next(
+                (
+                    instance
+                    for instance in snapshot.get_instances()
+                    if instance.is_healthy() and not instance.is_isolated()
+                ),
+                None,
+            )
+
+        instance = await eventually(registered, task=provider)
+        instance_id = instance.get_id()
+        common = [
+            *args,
+            "--service",
+            name,
+            "--state-file",
+            str(state_file),
+        ]
+        first = await state_resume_demo.main(
+            [
+                *common,
+                "--message",
+                "remember first turn",
+            ]
+        )
+        second = await state_resume_demo.main(
+            [
+                *common,
+                "--message",
+                "continue same context",
+            ]
+        )
+        assert first["context_id"]
+        assert first["context_id"] == second["context_id"]
+        assert "first turn" in first["replies"][0]
+        assert "same context" in second["replies"][0]
+        assert state_file.is_file()
+    finally:
+        provider.cancel()
+        try:
+            with contextlib.suppress(asyncio.CancelledError):
+                await provider
+            if probe is not None and instance_id is not None:
+                consumer = ConsumerAPI(probe)
+
+                async def deregistered():
+                    snapshot = await consumer.async_get_all_instances(
+                        GetAllInstancesRequest(
+                            namespace=namespace,
+                            service=name,
+                            timeout=1000,
+                        )
+                    )
+                    return all(
+                        instance.get_id() != instance_id for instance in snapshot.get_instances()
+                    )
+
+                await eventually(deregistered)
+        finally:
+            if probe is not None:
+                await asyncio.to_thread(probe.destroy)
+    return {
+        "service": name,
+        "context_id": first["context_id"],
+        "task_id": second["task_id"],
+        "turns": 2,
+        "resumed": True,
+    }
+
+
 async def verify_skill_a2a(address, namespace, token, stub):
-    skill_name = os.getenv("POLARIS_SKILL_NAME") if stub is None else "weather"
-    skill_version = os.getenv("POLARIS_SKILL_VERSION", "") if stub is None else ""
     mounted_service = os.getenv("POLARIS_AGENT_SERVICE", "") if stub is None else ""
+    if stub is None:
+        skill_name, discovered_version = await real_skill_reference(
+            address,
+            namespace,
+            entry=__file__,
+            service_name=mounted_service,
+        )
+        skill_version = os.getenv("POLARIS_SKILL_VERSION", "") or discovered_version
+    else:
+        skill_name, skill_version = "weather", ""
 
     async def verify_source(source, service=""):
         provider_arguments = [
@@ -302,7 +556,15 @@ async def verify_skill_a2a(address, namespace, token, stub):
 async def verify_skills(demo, address, namespace, stub):
     args = sdk_arguments(address, namespace)
     version = os.getenv("POLARIS_SKILL_VERSION", "") if stub is None else "code-v1"
-    names = [os.environ["POLARIS_SKILL_NAME"]] if stub is None and demo == "published" else []
+    names = []
+    if stub is None and demo == "published":
+        skill_name, discovered_version = await real_skill_reference(
+            address,
+            namespace,
+            entry=__file__,
+        )
+        names = [skill_name]
+        version = version or discovered_version
     service = (
         (os.environ["POLARIS_AGENT_SERVICE"] if stub is None else "mounted-agent")
         if demo == "mounted"
@@ -384,13 +646,15 @@ async def verify_skills(demo, address, namespace, stub):
 
 async def verify_mcp(address, namespace, stub):
     service = os.getenv("POLARIS_MCP_SERVICE") if stub is None else "offline-mcp"
-    result = await mcp_demo.main([
-        *sdk_arguments(address, namespace),
-        "--service",
-        service,
-        "--protocol-version",
-        "2025-06-18",
-    ])
+    result = await mcp_demo.main(
+        [
+            *sdk_arguments(address, namespace),
+            "--service",
+            service,
+            "--protocol-version",
+            "2025-06-18",
+        ]
+    )
     assert result["instances"]
     assert result["url"].endswith("/mcp")
     assert result["protocol"] == "mcp-streamable-http"
@@ -406,9 +670,74 @@ async def verify_mcp(address, namespace, stub):
     }
 
 
+async def verify_mcp_agent(address, namespace, stub):
+    host = get_local_host(address) if stub is None else "127.0.0.1"
+    result = await mcp_agent_demo.main(
+        [
+            *sdk_arguments(address, namespace),
+            "--service",
+            service_name("mcp"),
+            "--host",
+            host,
+            "--port",
+            "0",
+            "--ttl",
+            "1",
+            "--message",
+            "hello over MCP",
+        ]
+    )
+    assert result["protocol"] == "mcp-streamable-http"
+    assert "echo_text" in result["tools"]
+    assert "MCP echo: hello over MCP" in result["reply"]
+    if stub is not None:
+        assert stub.count("register") == 1
+        assert stub.count("deregister") == 1
+        assert not stub.instances
+    return result
+
+
+async def verify_skill_console(address, namespace, stub):
+    if stub is None:
+        skill_name, skill_version = await real_skill_reference(
+            address,
+            namespace,
+            entry=__file__,
+        )
+    else:
+        skill_name, skill_version = "weather", ""
+    result = await skill_console_demo.main(
+        [
+            *sdk_arguments(address, namespace),
+            "--skill-name",
+            skill_name,
+            "--skill-version",
+            skill_version,
+            "--message",
+            "/skill-list",
+            "--message",
+            f"/skill {skill_name}",
+        ]
+    )
+    assert result[0] == skill_name
+    assert result[1].startswith(f"{skill_name}\n\n")
+    return {
+        "skill_name": skill_name,
+        "skill_version": skill_version,
+        "replies": result,
+    }
+
+
 async def verify_runtime(address, namespace, stub):
     arguments = [*sdk_arguments(address, namespace), "--load-skills"]
-    skill_name = os.getenv("POLARIS_SKILL_NAME") if stub is None else "weather"
+    if stub is None:
+        skill_name, _ = await real_skill_reference(
+            address,
+            namespace,
+            entry=__file__,
+        )
+    else:
+        skill_name = "weather"
     if skill_name:
         arguments += ["--skill-name", skill_name]
     result = await runtime_demo.main(arguments)
@@ -417,6 +746,148 @@ async def verify_runtime(address, namespace, stub):
     assert result["mcp_resolver"] is False
     assert skill_name in result["skill_names"]
     return result
+
+
+async def verify_runtime_multi(address, namespace, stub):
+    if stub is None:
+        skill_name, skill_version = await real_skill_reference(
+            address,
+            namespace,
+            entry=__file__,
+        )
+    else:
+        skill_name, skill_version = "weather", ""
+    result = await runtime_multi_demo.main(
+        [
+            *sdk_arguments(address, namespace),
+            "--skill-name",
+            skill_name,
+            "--skill-version",
+            skill_version,
+        ]
+    )
+    assert result["agent_count"] == 2
+    assert result["shared_toolkit"]
+    assert skill_name in result["first_reply"]
+    assert result["second_reply"].startswith(f"{skill_name}\n\n")
+    return result
+
+
+def _json_request(url, *, method="GET", body=None, timeout=10):
+    import urllib.request
+
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8") if body is not None else None,
+        headers=headers,
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+async def verify_agent_service(address, namespace, stub):
+    service = service_name("service")
+    if stub is None:
+        skill_name, skill_version = await real_skill_reference(
+            address,
+            namespace,
+            entry=__file__,
+        )
+    else:
+        skill_name, skill_version = "weather", ""
+    ready_file = Path.cwd() / "agent-service-ready.json"
+    task = asyncio.create_task(
+        agent_service_demo.main(
+            [
+                *sdk_arguments(address, namespace),
+                "--service",
+                service,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "0",
+                "--ttl",
+                "1",
+                "--ready-file",
+                str(ready_file),
+                "--load-skills",
+                "--skill-name",
+                skill_name,
+                "--skill-version",
+                skill_version,
+            ]
+        )
+    )
+    probe = None
+    instance_id = None
+    try:
+
+        async def ready():
+            if ready_file.is_file():
+                return json.loads(ready_file.read_text(encoding="utf-8"))
+            return None
+
+        descriptor = await eventually(ready, timeout=20, task=task)
+        instance_id = descriptor["instance_id"]
+        endpoint = descriptor["endpoint"]
+        health = await asyncio.to_thread(_json_request, f"{endpoint}/health")
+        assert health["status"] == "ok"
+        assert health["skills"]
+        first = await asyncio.to_thread(
+            _json_request,
+            f"{endpoint}/chat",
+            method="POST",
+            body={"session_id": "first", "message": "/skill-list"},
+        )
+        second = await asyncio.to_thread(
+            _json_request,
+            f"{endpoint}/chat",
+            method="POST",
+            body={"session_id": "second", "message": "plain service message"},
+        )
+        assert skill_name in first["reply"]
+        assert second["reply"] == "Echo: plain service message"
+        health = await asyncio.to_thread(_json_request, f"{endpoint}/health")
+        assert health["sessions"] == 2
+    finally:
+        task.cancel()
+        try:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            probe = _common.context(
+                _common.parser("Service probe").parse_args(sdk_arguments(address, namespace)),
+                component="service-probe",
+            )
+            if instance_id is not None:
+                consumer = ConsumerAPI(probe)
+
+                async def deregistered():
+                    snapshot = await consumer.async_get_all_instances(
+                        GetAllInstancesRequest(
+                            namespace=namespace,
+                            service=service,
+                            timeout=1000,
+                        )
+                    )
+                    return all(
+                        instance.get_id() != instance_id for instance in snapshot.get_instances()
+                    )
+
+                await eventually(deregistered)
+        finally:
+            if probe is not None:
+                await asyncio.to_thread(probe.destroy)
+    if stub is not None:
+        assert not stub.instances
+    return {
+        "service": service,
+        "skill_name": skill_name,
+        "sessions": 2,
+        "http_verified": True,
+        "deregistered": True,
+    }
 
 
 async def verify(demo, real):
@@ -439,12 +910,24 @@ async def verify(demo, real):
             result = (
                 await verify_a2a(address, namespace, token, stub)
                 if demo == "a2a"
+                else await verify_streaming_provider(address, namespace, token, stub)
+                if demo == "streaming-provider"
+                else await verify_state_resume(address, namespace, token, stub)
+                if demo == "state-resume"
                 else await verify_skill_a2a(address, namespace, token, stub)
                 if demo == "skill-a2a"
                 else await verify_mcp(address, namespace, stub)
                 if demo == "mcp"
+                else await verify_mcp_agent(address, namespace, stub)
+                if demo == "mcp-agent"
                 else await verify_runtime(address, namespace, stub)
                 if demo == "runtime"
+                else await verify_runtime_multi(address, namespace, stub)
+                if demo == "runtime-multi"
+                else await verify_skill_console(address, namespace, stub)
+                if demo == "skill-console"
+                else await verify_agent_service(address, namespace, stub)
+                if demo == "agent-service"
                 else await verify_skills(demo, address, namespace, stub)
             )
         finally:
@@ -458,11 +941,17 @@ async def verify(demo, real):
         assert len({sdk.get_client_id() for sdk in contexts}) == len(contexts)
     expected_ai_categories = {
         "a2a": ("a2a",),
+        "streaming-provider": ("a2a",),
+        "state-resume": ("a2a",),
         "skill-a2a": ("a2a", "agentscope", "skill"),
         "mcp": ("mcp",),
+        "mcp-agent": ("mcp",),
         "published": ("skill",),
         "mounted": ("skill",),
         "runtime": ("base", "skill", "a2a"),
+        "runtime-multi": ("base", "agentscope", "skill"),
+        "skill-console": ("agentscope", "skill"),
+        "agent-service": ("agentscope", "skill"),
     }[demo]
     ai_logs = assert_ai_logs(*expected_ai_categories)
     result.update(
@@ -479,7 +968,20 @@ def main():
     arguments = argparse.ArgumentParser(description=__doc__)
     arguments.add_argument(
         "--demo",
-        choices=("a2a", "skill-a2a", "mcp", "published", "mounted", "runtime"),
+        choices=(
+            "a2a",
+            "streaming-provider",
+            "state-resume",
+            "skill-a2a",
+            "mcp",
+            "mcp-agent",
+            "published",
+            "mounted",
+            "runtime",
+            "runtime-multi",
+            "skill-console",
+            "agent-service",
+        ),
         required=True,
     )
     arguments.add_argument("--real", action="store_true")

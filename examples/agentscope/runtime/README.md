@@ -15,3 +15,7 @@ python examples/agentscope/runtime/main.py \
 
 Use `--no-skill`, `--no-a2a` and `--mcp` to toggle components. Runtime shutdown
 releases adapters and AI logs without destroying the borrowed SDKContext.
+
+The [multi_agent](multi_agent/) example creates two Agents from one Runtime,
+shares the Toolkit and Skill snapshot, and keeps their conversation state
+isolated.

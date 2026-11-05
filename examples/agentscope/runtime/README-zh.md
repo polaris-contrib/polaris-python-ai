@@ -19,3 +19,6 @@ python examples/agentscope/runtime/main.py \
 
 `--no-skill`、`--no-a2a`、`--mcp` 可切换组件。Runtime 关闭时只释放自己创建的适配器和
 AI logger，不销毁传入的 `SDKContext`。
+
+[multi_agent](multi_agent/) 示例使用一个 Runtime 创建两个 Agent，共享
+Toolkit 和 Skill 快照，并保持各自对话状态隔离。

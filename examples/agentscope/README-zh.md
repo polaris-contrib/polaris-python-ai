@@ -12,6 +12,18 @@
 `agentscope/runtime` 演示使用 `PolarisAgentConfig` 和 `PolarisAgentRuntime`
 统一装配 Skill、A2A、可选 MCP 与 AI 分类日志。
 
+新增场景：
+
+- `a2a/streaming_provider`：每个 A2A context 使用独立 Agent，流式返回 Tool 结果。
+- `a2a/console_consumer`：通过 Polaris 发现后进入 AgentScope `launch_console`。
+- `a2a/state_resume`：持久化并恢复 `A2AAgentState`。
+- `mcp/agent`：启动自包含 MCP Server，注册到 Polaris 并真实调用 Tool。
+- `skill/console_agent`：带动态 Skill 刷新的交互式 Agent。
+- `runtime/multi_agent`：一个 Runtime 创建两个隔离 Agent，共享 Skill 快照。
+- `agent_service`：提供 `/health` 和 `/chat` 的精简 FastAPI Agent 服务。
+
+这些示例使用本地确定性模型，不需要模型 API Key。
+
 ```bash
 ./examples/verify.sh --only agentscope
 ./examples/verify_e2e.sh --only agentscope
@@ -20,7 +32,8 @@ make -C examples/agentscope verify
 
 所有示例支持 `--config`、`--address`、`--skill-address`、`--namespace`
 和 `--timeout`。不传文件时通过环境变量和代码配置启动；
-Skill 地址未显式指定时由 SDK 从普通服务地址推导。
+传入 `--address` 时，示例会显式将 Skill 地址设为同主机 `8094`，
+也可通过 `--skill-address` 覆盖。
 SDK 日志和缓存按运行、组件隔离，关闭扩展不销毁借用的 Context。
 
 手动 A2A Provider 可指定 `--host`、`--port` 和 `--ttl`；未指定 host

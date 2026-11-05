@@ -17,7 +17,9 @@
 
 ## 离线验证
 
-A2A 注册、心跳、发现、调用、退出清理；已发布和挂载 Skill 的加载。
+覆盖标准/流式 A2A、A2A 状态恢复、MCP Tool 调用、已发布/挂载 Skill、
+Skill Console、单 Runtime 多 Agent 和精简 Agent Service；真实服务验证同时检查
+注册、心跳、发现、调用、反注册和本地监听器关闭。
 
 只替换 Polaris 的 protobuf gRPC 调用边界，SDK Context、插件、自动心跳、
 缓存、日志和 AgentScope 都使用真实实现。A2A HTTP 服务使用本机动态端口，
@@ -29,16 +31,16 @@ loader 关闭后临时目录必须删除，借用的 Context 在应用显式 des
 
 ```bash
 export POLARIS_SERVER_ADDRESS=<host>:8091
-export POLARIS_SERVICE_TOKEN=<service-token>
 export POLARIS_SKILL_NAME=<published-skill>
 export POLARIS_AGENT_SERVICE=<service-with-mounted-skills>
 export POLARIS_E2E_NAMESPACE=python-agentscope-e2e
 ./examples/verify_e2e.sh
 ```
 
-A2A 需服务 token；已发布 Skill 需预先发布的 POLARIS_SKILL_NAME；
-挂载 Skill 需预先挂载的 POLARIS_AGENT_SERVICE。每个场景只检查自己需要的变量，
-缺失时失败退出，不会悄悄切回离线替身。Skill 场景只读取和下载，不上传、不发布。
+A2A 服务 token 可为空。未设置 `POLARIS_SKILL_NAME` 时，新增 Skill 场景会
+自动读取目标命名空间中的已发布 Skill；挂载 Skill 需预先挂载的
+`POLARIS_AGENT_SERVICE`。每个场景只检查自己需要的变量，缺失时失败退出，
+不会悄悄切回离线替身。Skill 场景只读取和下载，不上传、不发布。
 真实 A2A 注册实例后发现它，保持超过两个 TTL，再反注册并等待发现结果移除。
 真实 Skill 验证已有 ZIP、Toolkit 说明、同版本缓存和 loader 关闭后的目录清理，
 不在远端运行离线的错误注入与固定版本矩阵。
@@ -48,7 +50,7 @@ A2A 需服务 token；已发布 Skill 需预先发布的 POLARIS_SKILL_NAME；
 - POLARIS_E2E_NAMESPACE：请求命名空间，默认 python-agentscope-e2e；default 会被拒绝。
 - POLARIS_E2E_SERVICE_TOKEN：优先于 POLARIS_SERVICE_TOKEN。
 - POLARIS_TOKEN：SDK connector 接入 token，由 SDK 读取，与服务 token 分开。
-- POLARIS_SKILL_SERVER_ADDRESS：覆盖 Skill 地址；未设置由 SDK 推导端口 8094。
+- POLARIS_SKILL_SERVER_ADDRESS：覆盖 Skill 地址；设置 --address 时示例默认使用同主机 8094。
 - POLARIS_SKILL_VERSION：指定 Skill 下载版本；挂载版本仍优先。
 - POLARIS_E2E_CONFIG：真实验证使用的 polaris.yaml 绝对路径，便于配置 TLS 等。
 - POLARIS_PYTHON：指定已安装依赖的 Python 解释器。
@@ -77,7 +79,7 @@ verification.log、console.log 和 SDK 分类日志。所有 Context 都验证�
 
 ## 注册服务与实例
 
-离线实例只存在于替身内，不访问外部 Polaris。真实 A2A 服务名以
+离线实例只存在于替身内，不访问外部 Polaris。真实 A2A、MCP 和 Agent Service 服务名以
 polaris-python-ai-e2e- 开头，每次含时间和随机标识，默认命名空间为
 python-agentscope-e2e；注册 host 为连接 Polaris 的本机源 IP，端口动态分配，
 不同验证不会争用固定端口。实例退出前反注册，服务对象可留在服务端。

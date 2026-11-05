@@ -19,6 +19,11 @@ resolved URL, transport, healthy instance and the disabled Tool list returned by
 the registry; it does not assume a fixture-specific Tool name. `--connect` is not
 used by the default verifier because it requires a real MCP HTTP server.
 
+`agentscope/mcp/agent` starts its own MCP Server. It verifies registration,
+Polaris discovery, `tools/list`, an actual `echo_text` Tool call, deregistration,
+client shutdown, and the local HTTP listener shutdown without an external MCP
+fixture.
+
 Logs are retained under `.logs/<run>/console.log`, `result.json`, and
-`verification.log`. Real verification requires `POLARIS_SERVER_ADDRESS` and an
-MCP Server registered in the selected namespace.
+`verification.log`. The resolver scenario requires `POLARIS_MCP_SERVICE`; the
+Agent scenario only requires `POLARIS_SERVER_ADDRESS`.

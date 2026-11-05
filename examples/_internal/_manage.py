@@ -22,6 +22,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.parse
 import urllib.request
@@ -48,35 +49,80 @@ VERIFIERS = {
     "agentscope/a2a/provider": ("_internal/_verify.py", ["--demo", "a2a"]),
     "agentscope/a2a/consumer": ("_internal/_verify.py", ["--demo", "a2a"]),
     "agentscope/a2a/skill": ("_internal/_verify.py", ["--demo", "skill-a2a"]),
+    "agentscope/a2a/streaming_provider": (
+        "_internal/_verify.py",
+        ["--demo", "streaming-provider"],
+    ),
+    "agentscope/a2a/console_consumer": (
+        "_internal/_verify.py",
+        ["--demo", "streaming-provider"],
+    ),
+    "agentscope/a2a/state_resume": (
+        "_internal/_verify.py",
+        ["--demo", "state-resume"],
+    ),
     "agentscope/skill/published": ("_internal/_verify.py", ["--demo", "published"]),
     "agentscope/skill/mounted": ("_internal/_verify.py", ["--demo", "mounted"]),
+    "agentscope/skill/console_agent": (
+        "_internal/_verify.py",
+        ["--demo", "skill-console"],
+    ),
     "agentscope/mcp": ("_internal/_verify.py", ["--demo", "mcp"]),
+    "agentscope/mcp/agent": ("_internal/_verify.py", ["--demo", "mcp-agent"]),
     "agentscope/runtime": ("_internal/_verify.py", ["--demo", "runtime"]),
+    "agentscope/runtime/multi_agent": (
+        "_internal/_verify.py",
+        ["--demo", "runtime-multi"],
+    ),
+    "agentscope/agent_service": ("_internal/_verify.py", ["--demo", "agent-service"]),
 }
 GROUPS = {
     "": [
         "agentscope/a2a",
+        "agentscope/a2a/streaming_provider",
+        "agentscope/a2a/console_consumer",
+        "agentscope/a2a/state_resume",
         "agentscope/a2a/skill",
         "agentscope/mcp",
+        "agentscope/mcp/agent",
         "agentscope/runtime",
+        "agentscope/runtime/multi_agent",
         "agentscope/skill/published",
         "agentscope/skill/mounted",
+        "agentscope/skill/console_agent",
+        "agentscope/agent_service",
     ],
     "agentscope": [
         "agentscope/a2a",
+        "agentscope/a2a/streaming_provider",
+        "agentscope/a2a/console_consumer",
+        "agentscope/a2a/state_resume",
         "agentscope/a2a/skill",
         "agentscope/mcp",
+        "agentscope/mcp/agent",
         "agentscope/runtime",
+        "agentscope/runtime/multi_agent",
         "agentscope/skill/published",
         "agentscope/skill/mounted",
+        "agentscope/skill/console_agent",
+        "agentscope/agent_service",
     ],
     "agentscope/a2a": [
         "agentscope/a2a",
         "agentscope/a2a/provider",
         "agentscope/a2a/consumer",
         "agentscope/a2a/skill",
+        "agentscope/a2a/streaming_provider",
+        "agentscope/a2a/console_consumer",
+        "agentscope/a2a/state_resume",
     ],
-    "agentscope/skill": ["agentscope/skill/published", "agentscope/skill/mounted"],
+    "agentscope/mcp": ["agentscope/mcp", "agentscope/mcp/agent"],
+    "agentscope/runtime": ["agentscope/runtime", "agentscope/runtime/multi_agent"],
+    "agentscope/skill": [
+        "agentscope/skill/published",
+        "agentscope/skill/mounted",
+        "agentscope/skill/console_agent",
+    ],
 }
 REAL_VERIFIERS = {
     name: (script, [*arguments, "--real"]) for name, (script, arguments) in VERIFIERS.items()
@@ -312,6 +358,7 @@ def delete_test_services(address, namespace, names):
     if not names:
         return []
     token = os.getenv("POLARIS_E2E_SERVICE_TOKEN") or os.getenv("POLARIS_SERVICE_TOKEN", "")
+    deregister_test_instances(address, namespace, names, token)
     request = urllib.request.Request(
         f"{address}/naming/v1/services/delete",
         data=json.dumps([{"namespace": namespace, "name": name} for name in names]).encode("utf-8"),
@@ -326,6 +373,67 @@ def delete_test_services(address, namespace, names):
     if failures:
         raise RuntimeError(f"Polaris service deletion partially failed: {failures}")
     return names
+
+
+def deregister_test_instances(address, namespace, names, token=""):
+    """Remove stale instances so their owned service records can be deleted."""
+    from polaris.api.config import init_context_by_config
+    from polaris.api.log import LogOptions
+    from polaris.api.provider import ProviderAPI
+    from polaris.pkg.config.api import Configuration
+    from polaris.pkg.model.server import InstanceDeRegisterRequest
+
+    instances = []
+    for name in names:
+        request = urllib.request.Request(
+            f"{address}/naming/v1/instances?namespace={urllib.parse.quote(namespace)}"
+            f"&service={urllib.parse.quote(name)}",
+            headers={"X-Polaris-Token": token} if token else {},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        if body.get("code") != 200000:
+            raise RuntimeError(f"Polaris instance query failed for {name}: {body}")
+        instances.extend(body.get("instances") or [])
+    if not instances:
+        return 0
+
+    config = Configuration()
+    config.set_default()
+    registry = (
+        (os.getenv("POLARIS_SERVER_ADDRESS") or os.getenv("POLARIS_SERVER_ADDRESSES", ""))
+        .split(",", 1)[0]
+        .strip()
+    )
+    if not registry:
+        parsed = urllib.parse.urlparse(address)
+        host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
+        registry = f"{host}:8091"
+    config.get_global().get_server_connector().addresses = [registry]
+    config.get_global().get_admin().port = 0
+    config.get_global().get_stat_reporter().enable = False
+    config.get_global().get_event_reporter().enable = False
+    with tempfile.TemporaryDirectory(prefix="polaris-ai-cleanup-") as directory:
+        context = init_context_by_config(
+            config,
+            log_options=LogOptions(log_dir=directory),
+        )
+        try:
+            provider = ProviderAPI(context)
+            for instance in instances:
+                provider.deregister_instance(
+                    InstanceDeRegisterRequest(
+                        service=instance["service"],
+                        service_token=instance.get("service_token", ""),
+                        namespace=instance["namespace"],
+                        host=instance["host"],
+                        port=instance["port"],
+                        instance_id=instance["id"],
+                    )
+                )
+        finally:
+            context.destroy()
+    return len(instances)
 
 
 def show_logs(scope, args):

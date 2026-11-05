@@ -10,3 +10,6 @@ python -m examples.agentscope.mcp.main \
 
 `--connect` performs the native MCP handshake and `tools/list`. Without it the
 example only verifies registry metadata and contract filtering.
+
+The [agent](agent/) example additionally starts a self-contained Streamable HTTP
+MCP Server, registers it in Polaris, and invokes its Tool through an Agent.
