@@ -94,6 +94,7 @@ class PolarisAgentRuntime:
                     config.namespace,
                     service_token=config.service_token,
                     ttl=config.a2a.registry.ttl,
+                    registration_port=config.a2a.registry.registration_port,
                     logger=self._category_logger("a2a"),
                 )
             if config.mcp.enabled:

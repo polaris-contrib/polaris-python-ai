@@ -190,24 +190,33 @@ asyncio.run(main())
 
 ```python
 from agentscope.agent import A2AAgent
-from polaris_ai.agentscope import A2ATransport, PolarisA2ARegistrar, PolarisA2AResolver
+from polaris_ai.agentscope import PolarisA2ARegistrar, PolarisA2AResolver
 
-# card 为已启动服务的 a2a.types.AgentCard；message 为 AgentScope 消息。
-async with PolarisA2ARegistrar(context, service_token="service-token") as registrar:
-    await registrar.async_register(card, [A2ATransport("10.0.0.1", 8080)])
+# card 为已启动服务的实例级 AgentCard；所有 interface 必须使用同一 IP。
+async with PolarisA2ARegistrar(
+    context,
+    service_token="service-token",
+    registration_port=1,
+) as registrar:
+    await registrar.async_register(card)
     async with PolarisA2AResolver(context) as resolver:
         remote_card = await resolver.async_resolve(card.name)
         async with A2AAgent(remote_card) as agent:
             reply = await agent.reply(message)
 ```
 
-每个 transport 注册一个普通实例，写入 `ai-agent-name`、`a2a.agent.card`、
-`a2a.transport` 和 `a2a.path`。自动心跳和实例不存在重注册复用 SDK，TTL 默认 5 秒。
+一张实例级 AgentCard 注册一个普通实例。实例 metadata 写入 `ai-agent-name`、
+`ai-agent-card` 和 `ai-a2a-version`；实例 `protocol` 为空，transport、path 和真实
+端口全部从 AgentCard 读取。`ai-a2a-version` 表示 AgentCard schema 版本，支持
+`0.3` 和 `1.0`。自动心跳和实例不存在重注册复用 SDK，TTL 默认 5 秒。
 `service_token` 用于注册、心跳和反注册，它与 connector token 是两个配置；可为空，
 由服务端决定是否接受无鉴权注册。
-业务实例地址由 `A2ATransport.host` 指定，SDK `bindIP` 不作为业务实例 host。
+实例 host 从 AgentCard interface URL 提取，注册端口由 `registration_port` 指定，
+默认 `1`；它不是 Agent 实际调用端口，SDK `bindIP` 也不作为业务实例 host。
 
-部分注册失败回滚本次成功实例；反注册失败记录保留在 `registered`，可再次 `close()` 重试。
+同 service、同 IP、同 `registration_port` 的重复注册覆盖最新 AgentCard；同 IP
+并行版本必须使用不同注册端口。注册失败只回滚本次唯一实例；反注册失败记录保留在
+`registered`，可再次 `close()` 重试。
 取消注册会等待在途请求完成并回滚，关闭后禁止新注册。
 `PolarisA2AServerRegistration` 可等待 `server_ready` 事件后再注册，退出或异常时
 统一反注册，用于替代 Java Server / Spring 的生命周期装配。
@@ -308,16 +317,16 @@ Polaris 实例。Resolver 只选择对应 graph 的健康、未隔离实例，�
 ```bash
 uv run python -m pytest
 uv build
-./examples/verify.sh
-./examples/verify.sh --only agentscope/a2a/skill
-./examples/verify.sh --only agentscope/mcp
-./examples/verify_e2e.sh --only agentscope/a2a
+./integration/verify.sh
+./integration/verify.sh --only agentscope/a2a/skill
+./integration/verify.sh --only agentscope/mcp
+./integration/verify_e2e.sh --only agentscope/a2a
 ```
 
 已验证原生 Toolkit、官方 A2A 类型、公开 SDK 包装器，以及本地 JSON-RPC/SSE 调用。
-单元测试使用确定性 SDK 替身。examples 离线集成测试使用真实 SDK 和 AgentScope，
+单元测试使用确定性 SDK 替身。integration 离线验证使用真实 SDK 和 AgentScope，
 仅替换 Polaris gRPC 边界；真实注册中心验证由 verify_e2e.sh 显式运行。
-运行参数、前置资源、日志和清理见 [examples/test.md](examples/test.md)。
+运行参数、前置资源、日志和清理见 [integration/README.md](integration/README.md)。
 可运行的已发布 Skill、挂载 Skill、A2A provider / consumer 和 Skill 驱动 A2A 示例见
 [examples/agentscope](examples/agentscope/README.md)，A2A Echo 示例无需模型密钥。
 真实 MCP Server E2E、远端 Controller 治理和 Skill 写操作暂不在当前范围。

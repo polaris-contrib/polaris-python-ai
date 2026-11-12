@@ -214,30 +214,38 @@ loading is `async_get_skill()`. `close()` and `async_close()` remove temporary a
 ## A2A
 
 ```python
-from polaris_ai.agentscope import A2ATransport, PolarisA2ARegistrar, PolarisA2AResolver
+from polaris_ai.agentscope import PolarisA2ARegistrar, PolarisA2AResolver
 from agentscope.agent import A2AAgent
 
-# card is the native a2a.types.AgentCard for an already listening server.
-async with PolarisA2ARegistrar(context, service_token="service-token") as registrar:
-    await registrar.async_register(card, [A2ATransport("10.0.0.1", 8080)])
+# card is an instance-level AgentCard; every interface must use the same IP.
+async with PolarisA2ARegistrar(
+    context,
+    service_token="service-token",
+    registration_port=1,
+) as registrar:
+    await registrar.async_register(card)
     async with PolarisA2AResolver(context) as resolver:
         remote_card = await resolver.async_resolve(card.name)
         async with A2AAgent(remote_card) as agent:
             reply = await agent.reply(message)
 ```
 
-Each transport becomes a Polaris instance. Metadata includes `ai-agent-name`,
-`a2a.agent.card`, `a2a.transport` and `a2a.path`; TLS selects `http` or `https`.
+One instance-level AgentCard becomes one Polaris instance. Metadata contains
+`ai-agent-name`, `ai-agent-card`, and `ai-a2a-version`; instance `protocol` is
+empty and transport, path, and real ports are read from the AgentCard interfaces.
+`ai-a2a-version` identifies the AgentCard schema and is either `0.3` or `1.0`.
 Automatic heartbeat and re-registration use the SDK's `register_instance` with a
 5-second TTL. `service_token` is used for registration, heartbeats and
 deregistration, is distinct from the connector token, and may be empty when the
-server permits unauthenticated registration. The SDK's `bindIP` is not a business
-host.
+server permits unauthenticated registration. The instance host comes from the
+AgentCard interface URL. `registration_port` defaults to `1` and is an instance
+identity, not the A2A call port; the SDK's `bindIP` is not a business host.
 
-Partial registration failure rolls back only that call's created instances.
-Failed deregistrations stay in `registrar.registered`, so another `close()` can
-retry. Cancelled registration waits for in-flight SDK work and rolls back its
-successes. A closed registrar accepts further cleanup, but no new registrations.
+Registering the same service, IP, and `registration_port` replaces the latest
+AgentCard. Parallel versions on one IP require different registration ports.
+Registration failure rolls back only that call's single instance. Failed
+deregistrations stay in `registrar.registered`, so another `close()` can retry.
+Cancelled registration waits for in-flight SDK work and rolls back its instance.
 `PolarisA2AServerRegistration` waits for `server_ready` before registration and
 deregisters on normal or exceptional exit, replacing the Java Server / Spring
 lifecycle assembly.
@@ -350,10 +358,10 @@ accepts `POLARIS_SERVER_ADDRESS`, `POLARIS_TOKEN`,
 ```bash
 uv run python -m pytest
 uv build
-./examples/verify.sh
-./examples/verify.sh --only agentscope/a2a/skill
-./examples/verify.sh --only agentscope/mcp
-./examples/verify_e2e.sh --only agentscope/a2a
+./integration/verify.sh
+./integration/verify.sh --only agentscope/a2a/skill
+./integration/verify.sh --only agentscope/mcp
+./integration/verify_e2e.sh --only agentscope/a2a
 ```
 
 Tests use real AgentScope Toolkit and A2A types, public Polaris API wrappers and
@@ -361,9 +369,10 @@ a deterministic SDK engine. The A2A transport test exercises the official server
 routes, JSON-RPC/SSE and `A2AAgent` through an in-process HTTP transport. These
 tests do not constitute a commercial Polaris server integration test.
 
-Offline example verification uses real SDK contexts and AgentScope, replacing
-only Polaris RPC calls. Real-registry verification is explicitly enabled through
-`verify_e2e.sh`. See [examples/test.md](examples/test.md) for prerequisites,
-per-run logs, assertions and cleanup, and [AgentScope examples](examples/agentscope/README.md)
-for manual commands. Real MCP Server E2E, remote controller governance, and
-Skill write operations remain outside the current example coverage.
+Offline integration verification uses real SDK contexts and AgentScope,
+replacing only Polaris RPC calls. Real-registry verification is explicitly
+enabled through `verify_e2e.sh`. See [integration/README.md](integration/README.md)
+for prerequisites, per-run logs, assertions and cleanup, and
+[AgentScope examples](examples/agentscope/README.md) for manual commands.
+Real MCP Server E2E, remote controller governance, and Skill write operations
+remain outside the current integration coverage.

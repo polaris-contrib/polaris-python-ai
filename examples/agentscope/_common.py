@@ -23,7 +23,7 @@ from pathlib import Path
 from polaris.api.config import init_context_by_config
 from polaris.pkg.config.api import Configuration
 
-from examples._internal._runtime import (
+from examples._support import (
     configure_e2e_event_reporting,
     demo_backup_directory,
     demo_log_options,

@@ -22,12 +22,11 @@ import socket
 
 import uvicorn
 
-from examples._internal._runtime import get_local_host
+from examples._support import get_local_host
 from examples.agentscope._common import ai_logging, context, parser
 from examples.agentscope._mock import DemoChatModel, default_tools
 from examples.agentscope.a2a.streaming_provider.server import create_streaming_app
 from polaris_ai.agentscope import (
-    A2ATransport,
     PolarisA2ARegistrar,
     PolarisA2AServerRegistration,
     PolarisDynamicSkillMiddleware,
@@ -41,6 +40,7 @@ async def main(argv=None):
     arguments.add_argument("--host")
     arguments.add_argument("--port", type=int, default=0)
     arguments.add_argument("--ttl", type=int, default=5)
+    arguments.add_argument("--registration-port", type=int, default=1)
     arguments.add_argument("--service-token", default=os.environ.get("POLARIS_SERVICE_TOKEN", ""))
     arguments.add_argument(
         "--skill-source", choices=("none", "published", "mounted"), default="none"
@@ -113,12 +113,13 @@ async def main(argv=None):
                     args.namespace,
                     service_token=args.service_token,
                     ttl=args.ttl,
+                    registration_port=args.registration_port,
                 ),
                 card,
-                [A2ATransport(args.host, port)],
             ):
                 print(
-                    f"Registered streaming {args.namespace}/{args.service} at {args.host}:{port}",
+                    f"Registered streaming {args.namespace}/{args.service} "
+                    f"at {args.host}:{port} with registrationPort={args.registration_port}",
                     flush=True,
                 )
                 await asyncio.shield(serving)

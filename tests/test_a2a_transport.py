@@ -27,21 +27,31 @@ from agentscope.agent import A2AAgent
 from agentscope.message import UserMsg
 
 from examples.agentscope.a2a.provider.server import create_server
-from polaris_ai.a2a import A2ATransport, PolarisA2ARegistrar, PolarisA2AResolver
+from polaris_ai.a2a import PolarisA2ARegistrar, PolarisA2AResolver
 from tests._support import FakeContext, FakeEngine, instance, snapshot
 
 
 class A2ATransportTests(IsolatedAsyncioTestCase):
     async def test_registered_card_drives_real_jsonrpc_streaming_via_native_agentscope(self):
-        app, card = create_server("weather-agent", "http://a2a.test/")
+        app, card = create_server(
+            "weather-agent",
+            "http://127.0.0.1/",
+            multi_interface=True,
+        )
         engine = FakeEngine()
         context = FakeContext(engine)
         async with PolarisA2ARegistrar(context, service_token="token") as registrar:
-            await registrar.async_register(card, [A2ATransport("a2a.test", 80)])
-            metadata = engine.register_calls[0].metadata["a2a.agent.card"]
-            engine.snapshot = snapshot([instance("a2a.test", metadata)])
+            await registrar.async_register(card)
+            metadata = engine.register_calls[0].metadata["ai-agent-card"]
+            engine.snapshot = snapshot([
+                instance("127.0.0.1", metadata, version=card.version),
+            ])
             async with PolarisA2AResolver(context) as resolver:
                 resolved = await resolver.async_resolve("weather-agent")
+                self.assertEqual(
+                    ["JSONRPC", "HTTP+JSON"],
+                    [item.protocol_binding for item in resolved.supported_interfaces],
+                )
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), trust_env=False,
                 ) as http_client:

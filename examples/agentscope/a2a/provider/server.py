@@ -17,9 +17,14 @@
 
 from a2a.server.agent_execution import AgentExecutor
 from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+from a2a.server.routes import (
+    create_agent_card_routes,
+    create_jsonrpc_routes,
+    create_rest_routes,
+)
 from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
 from a2a.types import (
+    AgentInterface,
     AgentSkill,
     Part,
     Task,
@@ -52,10 +57,32 @@ class ReplyExecutor(AgentExecutor):
         await TaskUpdater(event_queue, context.task_id, context.context_id).cancel()
 
 
-def create_server(service: str, base_url: str, agent=None, skills=None):
+def create_server(
+    service: str,
+    base_url: str,
+    agent=None,
+    skills=None,
+    *,
+    multi_interface=False,
+):
+    interfaces = None
+    if multi_interface:
+        interfaces = [
+            AgentInterface(
+                url=base_url,
+                protocol_binding="JSONRPC",
+                protocol_version="1.0",
+            ),
+            AgentInterface(
+                url=base_url.rstrip("/") + "/rest",
+                protocol_binding="HTTP+JSON",
+                protocol_version="1.0",
+            ),
+        ]
     card = build_agent_card(
         name=service,
-        url=base_url,
+        url=None if interfaces else base_url,
+        interfaces=interfaces,
         description="Model-free AgentScope integration verification",
         version="1.0.0",
         skills=(
@@ -74,7 +101,11 @@ def create_server(service: str, base_url: str, agent=None, skills=None):
     handler = DefaultRequestHandler(
         agent_executor=ReplyExecutor(reply), task_store=InMemoryTaskStore(), agent_card=card,
     )
-    app = Starlette(routes=[
-        *create_agent_card_routes(card), *create_jsonrpc_routes(handler, rpc_url="/"),
-    ])
+    routes = [
+        *create_agent_card_routes(card),
+        *create_jsonrpc_routes(handler, rpc_url="/"),
+    ]
+    if multi_interface:
+        routes.extend(create_rest_routes(handler, path_prefix="/rest"))
+    app = Starlette(routes=routes)
     return app, card

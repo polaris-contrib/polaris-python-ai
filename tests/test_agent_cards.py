@@ -17,7 +17,7 @@ import pytest
 
 pytest.importorskip("a2a.types")
 
-from a2a.types import AgentCard, AgentSkill
+from a2a.types import AgentCard, AgentInterface, AgentSkill
 from agentscope.skill import Skill
 
 from polaris_ai.agentscope import PolarisAgentCardTemplate, build_agent_card
@@ -63,3 +63,46 @@ def test_card_template_can_override_skills_per_agent():
     assert card.version == "2.0"
     assert card.supported_interfaces[0].protocol_binding == "HTTP+JSON"
     assert [item.name for item in card.skills] == ["runtime"]
+
+
+def test_build_agent_card_accepts_multiple_native_interfaces():
+    interfaces = [
+        AgentInterface(
+            url="http://10.0.0.1:8080/a2a",
+            protocol_binding="JSONRPC",
+            protocol_version="1.0",
+        ),
+        AgentInterface(
+            url="http://10.0.0.1:9090/a2a",
+            protocol_binding="GRPC",
+            protocol_version="1.0",
+        ),
+    ]
+    card = build_agent_card(
+        name="multi-transport-agent",
+        interfaces=interfaces,
+        version="2.3.1",
+    )
+    assert [item.url for item in card.supported_interfaces] == [
+        "http://10.0.0.1:8080/a2a",
+        "http://10.0.0.1:9090/a2a",
+    ]
+    assert [item.protocol_binding for item in card.supported_interfaces] == [
+        "JSONRPC",
+        "GRPC",
+    ]
+
+
+def test_build_agent_card_rejects_url_and_interfaces_together():
+    with pytest.raises(ValueError, match="either url or interfaces"):
+        build_agent_card(
+            name="agent",
+            url="http://10.0.0.1:8080",
+            interfaces=[
+                AgentInterface(
+                    url="http://10.0.0.1:9090",
+                    protocol_binding="GRPC",
+                    protocol_version="1.0",
+                )
+            ],
+        )

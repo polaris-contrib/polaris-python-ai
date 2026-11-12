@@ -16,12 +16,17 @@
 """Framework-independent A2A registration and card discovery."""
 
 from polaris_ai._version import __version__
+
+from ._card import A2A_VERSION_03, A2A_VERSION_10, SUPPORTED_A2A_VERSIONS
 from .registry import A2ATransport, PolarisA2ARegistrar, RegisteredInstance
 from .resolver import AgentCardNotFoundError, PolarisA2AResolver
 from .server import PolarisA2AServerRegistration
 
 __all__ = [
     "A2ATransport",
+    "A2A_VERSION_03",
+    "A2A_VERSION_10",
+    "SUPPORTED_A2A_VERSIONS",
     "PolarisA2ARegistrar",
     "RegisteredInstance",
     "AgentCardNotFoundError",

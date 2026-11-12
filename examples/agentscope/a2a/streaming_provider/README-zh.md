@@ -10,7 +10,10 @@
 
 ```bash
 python examples/agentscope/a2a/streaming_provider/main.py \
-  --address 1.14.219.4:8091 \
+  --address 127.0.0.1:8091 \
   --service streaming-agent \
+  --registration-port 1 \
   --skill-source none
 ```
+
+实例默认使用注册端口 `1`，实际调用端口保留在 AgentCard interface URL 中。

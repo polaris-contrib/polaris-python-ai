@@ -25,9 +25,8 @@
 这些示例使用本地确定性模型，不需要模型 API Key。
 
 ```bash
-./examples/verify.sh --only agentscope
-./examples/verify_e2e.sh --only agentscope
-make -C examples/agentscope verify
+./integration/verify.sh --only agentscope
+./integration/verify_e2e.sh --only agentscope
 ```
 
 所有示例支持 `--config`、`--address`、`--skill-address`、`--namespace`
@@ -36,12 +35,16 @@ make -C examples/agentscope verify
 也可通过 `--skill-address` 覆盖。
 SDK 日志和缓存按运行、组件隔离，关闭扩展不销毁借用的 Context。
 
-手动 A2A Provider 可指定 `--host`、`--port` 和 `--ttl`；未指定 host
-时使用连接 Polaris 的本机源 IP。自动心跳复用 ProviderAPI。
+手动 A2A Provider 可指定 `--host`、`--port`、`--ttl` 和
+`--registration-port`；未指定 host 时使用连接 Polaris 的本机源 IP。
+实例默认注册端口为 `1`，真实调用端口保留在 AgentCard interface URL 中。
+`--multi-interface` 会在同一端口同时暴露 JSONRPC 和 HTTP+JSON，仍只注册一个实例。
+实例 metadata 为 `ai-agent-name`、`ai-agent-card`、`ai-a2a-version`，
+`Instance.protocol` 为空。自动心跳复用 ProviderAPI。
 Consumer 调用官方 A2AAgent，预期输出 `Echo: Hello Polaris`。
 Provider 可用 `--skill-source published|mounted` 切换 Skill 驱动模式，
 支持 `/skill-list`、`/skill <name>`，其他输入回显。
 
 已发布 Skill 通过 `--name` 和 `--version` 筛选；挂载 Skill 通过
 `--service` 读取服务元数据。临时资源在 loader 关闭时删除。
-各目录的 `test.md` 记录验证条件与产物。
+验证条件与产物记录在 `integration/cases/agentscope/`。

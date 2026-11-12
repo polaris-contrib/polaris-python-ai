@@ -1,53 +1,42 @@
 # Examples
 
-Install Python 3.12+ and the example dependencies from the project root:
+This directory contains runnable AgentScope integration examples. The files
+here are executable documentation for application authors; verification
+orchestration, registry stubs, assertions and fixture cleanup live under
+[`../integration`](../integration).
+
+Install Python 3.12+ and the example dependencies:
 
 ```bash
 uv sync --all-extras
-./examples/verify.sh
-./examples/verify.sh --only agentscope/skill
-./examples/verify.sh --only agentscope/a2a/skill
-./examples/verify.sh --only agentscope/mcp
-./examples/verify.sh --only agentscope/runtime
-./examples/verify.sh --only agentscope/a2a/streaming_provider
-./examples/verify.sh --only agentscope/mcp/agent
-./examples/verify.sh --only agentscope/agent_service
 ```
 
-The scripts select `POLARIS_PYTHON`, then the project's `.venv/bin/python`,
-then uv or python3. They resolve paths independently of the current directory.
-
-Offline verification uses the real SDK, native AgentScope Toolkit and A2AAgent.
-Only the Polaris gRPC boundary is replaced. A2A runs a model-free local
-JSON-RPC/SSE server on a dynamic port. No model credentials are required.
-The newer examples also cover MCP Tool calls, A2A state resume, Skill console
-agents, multi-Agent Runtime reuse and a small FastAPI Agent service.
-
-For a real registry:
+Run examples directly:
 
 ```bash
-export POLARIS_SERVER_ADDRESS=<host>:8091
-export POLARIS_SERVICE_TOKEN=<service-token>
-export POLARIS_E2E_NAMESPACE=python-agentscope-e2e
-export POLARIS_SKILL_NAME=<published-skill>
-export POLARIS_AGENT_SERVICE=<service-with-mounted-skills>
-./examples/verify_e2e.sh
+python -m examples.agentscope.a2a.provider.main --address 127.0.0.1:8091
+python -m examples.agentscope.a2a.consumer.main --address 127.0.0.1:8091
+python -m examples.agentscope.skill.published.main --address 127.0.0.1:8091
+python -m examples.agentscope.mcp.agent.main --address 127.0.0.1:8091
+python -m examples.agentscope.agent_service.main --address 127.0.0.1:8091
 ```
 
-The namespace defaults to `python-agentscope-e2e`; `default` is rejected. Skill
-fixtures must already exist; these scripts do not publish Skills. A2A test
-instances are deregistered before exit. Each scenario retains console output,
-assertions, results, SDK logs, `polaris/log/ai/` category logs and backups
-beneath its own `.logs/` directory.
+Each runnable directory also exposes `build`, `run`, `package` and `clean`
+through its Makefile:
 
 ```bash
-./examples/logs.sh --latest --tail 50
-./examples/cleanup.sh --dry-run
-./examples/cleanup.sh --force
-make -C examples verify ARGS="--only agentscope/a2a"
+make -C examples/agentscope/a2a/provider run ARGS="--address 127.0.0.1:8091"
+make -C examples/agentscope/mcp/agent run ARGS="--address 127.0.0.1:8091"
 ```
 
-Every runnable directory provides `build`, `run`, `package`, `clean`,
-`verify` and `verify-e2e` Make targets. Packages include shared example
-helpers and extension sources. See [test.md](test.md) for assertions,
-environment variables, results and cleanup scope.
+Example groups:
+
+- A2A provider and consumer, including streaming, state resume and Skill-backed agents.
+- MCP metadata resolution and a self-contained MCP Agent with a real Tool call.
+- Published, mounted and console Skill experiences.
+- Runtime composition with one or multiple Agents.
+- A small FastAPI Agent service with `/health` and `/chat`.
+
+Offline and real-service verification commands are documented in
+[`integration/README.md`](../integration/README.md). Verification, log and
+cleanup commands run exclusively from `integration/`.

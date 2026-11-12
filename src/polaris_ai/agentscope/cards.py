@@ -46,7 +46,8 @@ def _agent_skill(skill) -> AgentSkill:
 def build_agent_card(
     *,
     name: str,
-    url: str,
+    url: str | None = None,
+    interfaces: Sequence[AgentInterface] | None = None,
     description: str = "",
     version: str = "1.0.0",
     protocol_binding: str = "JSONRPC",
@@ -59,17 +60,29 @@ def build_agent_card(
     """Build a native A2A card while preserving framework-owned types."""
     if not isinstance(name, str) or not name.strip():
         raise ValueError("Agent name is required")
-    if not isinstance(url, str) or not url.strip():
-        raise ValueError("Agent URL is required")
+    if interfaces is not None and url:
+        raise ValueError("provide either url or interfaces, not both")
+    if interfaces is None:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("Agent URL or interfaces are required")
+        selected_interfaces = [
+            AgentInterface(
+                url=url,
+                protocol_binding=protocol_binding,
+                protocol_version=protocol_version,
+            )
+        ]
+    else:
+        selected_interfaces = list(interfaces)
+        if not selected_interfaces:
+            raise ValueError("Agent interfaces must not be empty")
+        if any(not isinstance(item, AgentInterface) for item in selected_interfaces):
+            raise ValueError("interfaces must contain AgentInterface objects")
     return AgentCard(
         name=name.strip(),
         description=description,
         version=version,
-        supported_interfaces=[AgentInterface(
-            url=url,
-            protocol_binding=protocol_binding,
-            protocol_version=protocol_version,
-        )],
+        supported_interfaces=selected_interfaces,
         capabilities=AgentCapabilities(streaming=streaming),
         default_input_modes=list(input_modes),
         default_output_modes=list(output_modes),

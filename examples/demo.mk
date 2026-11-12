@@ -1,10 +1,9 @@
-# Use the same interpreter and retained run directories as verification.
+# Keep runnable examples self-contained.
 ARGS ?=
 DEMO_NAME ?= $(notdir $(CURDIR))
 REPO_ROOT := $(shell dir="$(CURDIR)"; while [ "$$dir" != "/" ] && [ ! -f "$$dir/pyproject.toml" ]; do dir=$$(dirname "$$dir"); done; printf '%s\n' "$$dir")
-DEMO_PATH := $(patsubst $(REPO_ROOT)/examples/%,%,$(CURDIR))
 
-.PHONY: build build-x86 package run verify verify-e2e logs cleanup clean
+.PHONY: build build-x86 package run clean
 
 build:
 	@printf '%s\n' \
@@ -19,8 +18,17 @@ build:
 		'  echo "place this demo inside a polaris-python-ai checkout" >&2' \
 		'  exit 1' \
 		'fi' \
-		'source "$$ROOT/examples/_internal/_scripts.sh"' \
-		'example_manage "$$HERE" run -- "$$@"' \
+		'if [ -n "$${POLARIS_PYTHON:-}" ]; then' \
+		'  PYTHON=("$$POLARIS_PYTHON")' \
+		'elif [ -x "$$ROOT/.venv/bin/python" ]; then' \
+		'  PYTHON=("$$ROOT/.venv/bin/python")' \
+		'elif command -v uv >/dev/null 2>&1; then' \
+		'  PYTHON=(uv run --project "$$ROOT" --all-extras python)' \
+		'else' \
+		'  PYTHON=(python3)' \
+		'fi' \
+		'export PYTHONPATH="$$ROOT/src:$$ROOT$${PYTHONPATH:+:$$PYTHONPATH}"' \
+		'exec "$${PYTHON[@]}" "$$HERE/main.py" "$$@"' \
 		> "$(CURDIR)/bin"
 	@chmod +x "$(CURDIR)/bin"
 	@echo "built $(CURDIR)/bin"
@@ -53,18 +61,6 @@ package: build
 
 run: build
 	"$(CURDIR)/bin" $(ARGS)
-
-verify:
-	"$(REPO_ROOT)/examples/verify.sh" --only "$(DEMO_PATH)" $(ARGS)
-
-verify-e2e:
-	"$(REPO_ROOT)/examples/verify_e2e.sh" --only "$(DEMO_PATH)" $(ARGS)
-
-logs:
-	bash -c 'source "$(REPO_ROOT)/examples/_internal/_scripts.sh"; example_manage "$(CURDIR)" logs "$$@"' -- $(ARGS)
-
-cleanup:
-	bash -c 'source "$(REPO_ROOT)/examples/_internal/_scripts.sh"; example_manage "$(CURDIR)" cleanup "$$@"' -- $(ARGS)
 
 clean:
 	rm -f "$(CURDIR)/bin" "$(CURDIR)/x86-bin"

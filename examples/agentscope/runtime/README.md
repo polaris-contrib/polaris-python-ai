@@ -5,7 +5,7 @@ resolver, Core SDK logging and AI category logging through
 `PolarisAgentConfig` and `PolarisAgentRuntime`.
 
 ```bash
-./examples/verify.sh --only agentscope/runtime
+./integration/verify.sh --only agentscope/runtime
 
 python examples/agentscope/runtime/main.py \
   --address 127.0.0.1:8091 \

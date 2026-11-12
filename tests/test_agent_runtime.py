@@ -30,6 +30,7 @@ from polaris.pkg.model.skill import (
 from polaris_ai.agentscope import PolarisAgentConfig, PolarisAgentRuntime
 from polaris_ai.agentscope.config import (
     PolarisA2AConfig,
+    PolarisA2ARegistryConfig,
     PolarisMCPConfig,
     PolarisSkillConfig,
 )
@@ -98,6 +99,18 @@ def test_runtime_allows_empty_registry_service_token():
     assert runtime.registrar.service_token == ""
     runtime.close()
     assert context.is_destroy()
+
+
+def test_runtime_passes_a2a_registration_port_to_registrar():
+    context = FakeContext(FakeEngine())
+    config = PolarisAgentConfig(
+        a2a=PolarisA2AConfig(
+            registry=PolarisA2ARegistryConfig(registration_port=18080),
+        ),
+    )
+    runtime = PolarisAgentRuntime(config, sdk_context=context)
+    assert runtime.registrar.registration_port == 18080
+    runtime.close()
 
 
 def test_attach_to_agent_builds_toolkit_and_dynamic_middleware():
