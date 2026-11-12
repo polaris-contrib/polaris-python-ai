@@ -24,9 +24,9 @@ import contextlib
 import json
 import os
 import socket
+import subprocess
 import sys
-import time
-import uuid
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
@@ -34,6 +34,12 @@ from urllib.parse import urlsplit
 REPO = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(REPO / "src"), str(REPO)]
 
+import httpx
+import psutil
+from a2a.client import ClientConfig, ClientFactory
+from a2a.types import AgentCard
+from agentscope.agent import A2AAgent
+from agentscope.message import UserMsg
 from agentscope.tool import Toolkit
 from polaris.api.consumer import ConsumerAPI
 from polaris.api.skill import SkillAPI
@@ -57,8 +63,11 @@ from examples.agentscope.skill.console_agent import main as skill_console_demo
 from examples.agentscope.skill.mounted import main as mounted_demo
 from examples.agentscope.skill.published import main as published_demo
 from integration.stub import RegistryStub, offline_registry
-from integration.support import e2e_namespace, verification_directory
+from integration.support import e2e_namespace, record_external_process, verification_directory
+from polaris_ai.a2a._card import decode_card
 from polaris_ai.agentscope import PolarisSkillLoader
+
+RETAIN_ENV = "POLARIS_E2E_RETAIN"
 
 
 def required_environment(demo):
@@ -96,7 +105,8 @@ def scenario_environment(address):
 
 
 def service_name(kind="a2a"):
-    return f"polaris-python-ai-e2e-agentscope-{kind}-{time.time_ns()}-{uuid.uuid4().hex[:6]}"
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    return f"agentscope-{kind}-{timestamp}"
 
 
 def sdk_arguments(address, namespace):
@@ -183,6 +193,7 @@ def assert_instance_agent_card(instance, name, host, *, registration_port=1):
         "ai-agent-card",
         "ai-a2a-version",
     }
+    # Discovery expands server-side location/version fields into metadata.
     assert required_keys <= set(metadata)
     assert not {"a2a.agent.card", "a2a.transport", "a2a.path"} & set(metadata)
     card_payload = json.loads(metadata["ai-agent-card"])
@@ -194,6 +205,172 @@ def assert_instance_agent_card(instance, name, host, *, registration_port=1):
     return card_payload, interfaces
 
 
+def retain_requested():
+    return os.getenv(RETAIN_ENV, "").lower() in ("1", "true", "yes", "on")
+
+
+def start_retained_provider(arguments):
+    entry = REPO / "examples/agentscope/a2a/provider/main.py"
+    run_dir = Path(os.environ["POLARIS_DEMO_RUN_DIR"])
+    case_dir = Path(os.environ["POLARIS_DEMO_DIRECTORY"])
+    work_dir = run_dir / "work"
+    log_path = run_dir / "provider.log"
+    process_options = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
+    output = log_path.open("w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            [sys.executable, str(entry), *arguments],
+            cwd=work_dir,
+            env=os.environ.copy(),
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+            **process_options,
+        )
+    finally:
+        output.close()
+    try:
+        record = record_external_process(case_dir, psutil.Process(process.pid), entry)
+    except BaseException:
+        stop_retained_provider(process, None)
+        raise
+    return process, record, log_path
+
+
+def stop_retained_provider(process, record):
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    if record is not None:
+        record.unlink(missing_ok=True)
+
+
+async def call_card_interface(card_payload, binding, protocol_version, message):
+    card = decode_card(card_payload)
+    interface = next(
+        (
+            item
+            for item in card.supported_interfaces
+            if item.protocol_binding == binding and item.protocol_version == protocol_version
+        ),
+        None,
+    )
+    assert interface is not None, f"Missing {binding} {protocol_version} interface"
+    selected = AgentCard()
+    selected.CopyFrom(card)
+    del selected.supported_interfaces[:]
+    selected.supported_interfaces.append(interface)
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as http_client:
+        client = ClientFactory(
+            ClientConfig(
+                streaming=True,
+                polling=False,
+                httpx_client=http_client,
+                supported_protocol_bindings=[binding],
+            )
+        ).create(selected)
+        async with A2AAgent(selected, client=client) as agent:
+            reply = await agent.reply(UserMsg(name="user", content=message))
+            return reply.get_text_content()
+
+
+async def verify_retained_a2a(address, namespace, token):
+    name = service_name("a2a-multi-protocol")
+    host = get_local_host(address)
+    args = sdk_arguments(address, namespace)
+    provider, record, log_path = start_retained_provider(
+        [
+            *args,
+            "--service",
+            name,
+            "--service-token",
+            token,
+            "--host",
+            host,
+            "--port",
+            "0",
+            "--ttl",
+            "1",
+            "--agent-version",
+            "2.1.0",
+            "--multi-protocol",
+        ]
+    )
+    probe = None
+    try:
+        probe = _common.context(
+            _common.parser("Retained A2A probe").parse_args(args),
+            component="retained-probe",
+        )
+        consumer = ConsumerAPI(probe)
+        request = GetAllInstancesRequest(namespace=namespace, service=name, timeout=1000)
+
+        async def registered():
+            if provider.poll() is not None:
+                raise AssertionError(
+                    f"Retained provider exited with code {provider.returncode}; log={log_path}"
+                )
+            snapshot = await consumer.async_get_all_instances(request)
+            return next(
+                (
+                    instance
+                    for instance in snapshot.get_instances()
+                    if instance.is_healthy() and not instance.is_isolated()
+                ),
+                None,
+            )
+
+        instance = await eventually(registered, timeout=30)
+        card_payload, interfaces = assert_instance_agent_card(instance, name, host)
+        assert instance.get_version() == "2.1.0"
+        assert len(interfaces) == 3
+        declared = {
+            (item["protocolBinding"], item["protocolVersion"], item.get("tenant", ""))
+            for item in interfaces
+        }
+        assert declared == {
+            ("JSONRPC", "1.0", name),
+            ("JSONRPC", "0.3", ""),
+            ("HTTP+JSON", "1.0", ""),
+        }
+        replies = [
+            await call_card_interface(card_payload, "JSONRPC", "1.0", "jsonrpc-1.0"),
+            await call_card_interface(card_payload, "JSONRPC", "0.3", "jsonrpc-0.3"),
+            await call_card_interface(card_payload, "HTTP+JSON", "1.0", "http-json-1.0"),
+        ]
+        assert replies == [
+            "Echo: jsonrpc-1.0",
+            "Echo: jsonrpc-0.3",
+            "Echo: http-json-1.0",
+        ]
+        await asyncio.sleep(3.2)
+        assert await registered(), "Retained provider disappeared while heartbeats ran"
+    except BaseException:
+        stop_retained_provider(provider, record)
+        raise
+    finally:
+        if probe is not None:
+            await asyncio.to_thread(probe.destroy)
+    return {
+        "service": name,
+        "instance_id": instance.get_id(),
+        "interfaces": interfaces,
+        "replies": replies,
+        "retained": True,
+        "pid": provider.pid,
+        "process_record": str(record),
+        "provider_log": str(log_path),
+    }
+
+
 async def verify_a2a(
     address,
     namespace,
@@ -201,10 +378,11 @@ async def verify_a2a(
     stub,
     *,
     provider_arguments=(),
+    service_kind="a2a",
     messages=("Hello Polaris",),
     expected_reply="Echo: Hello Polaris",
 ):
-    name = service_name() if stub is None else "offline-echo-agent"
+    name = service_name(service_kind) if stub is None else "offline-echo-agent"
     host = get_local_host(address) if stub is None else "127.0.0.1"
     args = sdk_arguments(address, namespace)
     initial_counts = (
@@ -223,8 +401,6 @@ async def verify_a2a(
                 "--port",
                 "0",
                 "--ttl",
-                "1",
-                "--registration-port",
                 "1",
                 "--multi-interface",
                 *provider_arguments,
@@ -326,7 +502,7 @@ async def verify_a2a(
 
 
 async def verify_streaming_provider(address, namespace, token, stub):
-    name = service_name("streaming-a2a")
+    name = service_name("a2a-streaming")
     host = get_local_host(address) if stub is None else "127.0.0.1"
     args = sdk_arguments(address, namespace)
     provider = asyncio.create_task(
@@ -342,8 +518,6 @@ async def verify_streaming_provider(address, namespace, token, stub):
                 "--port",
                 "0",
                 "--ttl",
-                "1",
-                "--registration-port",
                 "1",
             ]
         )
@@ -426,7 +600,7 @@ async def verify_streaming_provider(address, namespace, token, stub):
 
 
 async def verify_state_resume(address, namespace, token, stub):
-    name = service_name("state-resume")
+    name = service_name("a2a-state-resume")
     host = get_local_host(address) if stub is None else "127.0.0.1"
     args = sdk_arguments(address, namespace)
     provider = asyncio.create_task(
@@ -564,6 +738,7 @@ async def verify_skill_a2a(address, namespace, token, stub):
             token,
             stub,
             provider_arguments=provider_arguments,
+            service_kind="a2a-skill",
             messages=("/skill-list", f"/skill {skill_name}"),
             expected_reply=None,
         )
@@ -711,7 +886,7 @@ async def verify_mcp_agent(address, namespace, stub):
         [
             *sdk_arguments(address, namespace),
             "--service",
-            service_name("mcp"),
+            service_name("mcp-agent"),
             "--host",
             host,
             "--port",
@@ -823,7 +998,7 @@ def _json_request(url, *, method="GET", body=None, timeout=10):
 
 
 async def verify_agent_service(address, namespace, stub):
-    service = service_name("service")
+    service = service_name("agent-service")
     if stub is None:
         skill_name, skill_version = await real_skill_reference(
             address,
@@ -942,29 +1117,34 @@ async def verify(demo, real):
     )
     with boundary, patch.object(_common, "init_context_by_config", tracked_context):
         try:
-            result = (
-                await verify_a2a(address, namespace, token, stub)
-                if demo == "a2a"
-                else await verify_streaming_provider(address, namespace, token, stub)
-                if demo == "streaming-provider"
-                else await verify_state_resume(address, namespace, token, stub)
-                if demo == "state-resume"
-                else await verify_skill_a2a(address, namespace, token, stub)
-                if demo == "skill-a2a"
-                else await verify_mcp(address, namespace, stub)
-                if demo == "mcp"
-                else await verify_mcp_agent(address, namespace, stub)
-                if demo == "mcp-agent"
-                else await verify_runtime(address, namespace, stub)
-                if demo == "runtime"
-                else await verify_runtime_multi(address, namespace, stub)
-                if demo == "runtime-multi"
-                else await verify_skill_console(address, namespace, stub)
-                if demo == "skill-console"
-                else await verify_agent_service(address, namespace, stub)
-                if demo == "agent-service"
-                else await verify_skills(demo, address, namespace, stub)
-            )
+            if real and retain_requested():
+                if demo != "a2a":
+                    raise ValueError("--retain is only supported for the A2A provider case")
+                result = await verify_retained_a2a(address, namespace, token)
+            else:
+                result = (
+                    await verify_a2a(address, namespace, token, stub)
+                    if demo == "a2a"
+                    else await verify_streaming_provider(address, namespace, token, stub)
+                    if demo == "streaming-provider"
+                    else await verify_state_resume(address, namespace, token, stub)
+                    if demo == "state-resume"
+                    else await verify_skill_a2a(address, namespace, token, stub)
+                    if demo == "skill-a2a"
+                    else await verify_mcp(address, namespace, stub)
+                    if demo == "mcp"
+                    else await verify_mcp_agent(address, namespace, stub)
+                    if demo == "mcp-agent"
+                    else await verify_runtime(address, namespace, stub)
+                    if demo == "runtime"
+                    else await verify_runtime_multi(address, namespace, stub)
+                    if demo == "runtime-multi"
+                    else await verify_skill_console(address, namespace, stub)
+                    if demo == "skill-console"
+                    else await verify_agent_service(address, namespace, stub)
+                    if demo == "agent-service"
+                    else await verify_skills(demo, address, namespace, stub)
+                )
         finally:
             for sdk in reversed(contexts):
                 await asyncio.to_thread(sdk.destroy)

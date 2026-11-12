@@ -18,9 +18,11 @@
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -126,15 +128,35 @@ def test_runner_retains_exit_code_and_output(example_tree, exit_code):
     assert (run / "console.log").read_text(encoding="utf-8") == "verified\n"
 
 
+def test_runner_sets_retain_environment_only_when_requested(example_tree, monkeypatch):
+    directory = example_tree / "agentscope/a2a"
+    (directory / "provider").mkdir()
+    entry = directory / "verify.py"
+    entry.write_text(
+        "import os\nprint(os.getenv('POLARIS_E2E_RETAIN', 'missing'), flush=True)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("POLARIS_E2E_RETAIN", "parent-value")
+
+    assert manager.run_process(directory, entry, [], "verify-e2e", 3, retain=True) == 0
+    assert manager.run_process(directory, entry, [], "verify-e2e", 3) == 0
+
+    outputs = {
+        (run / "console.log").read_text(encoding="utf-8")
+        for run in (directory / ".logs").iterdir()
+    }
+    assert outputs == {"1\n", "missing\n"}
+
+
 def test_e2e_namespace_defaults_to_dedicated_namespace(monkeypatch):
     monkeypatch.delenv("POLARIS_E2E_NAMESPACE", raising=False)
-    assert support.e2e_namespace() == "python-agentscope-e2e"
-    assert manager.e2e_namespace() == "python-agentscope-e2e"
+    assert support.e2e_namespace() == "polaris-python-ai-integration"
+    assert manager.e2e_namespace() == "polaris-python-ai-integration"
 
     monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "custom-e2e")
     assert support.e2e_namespace() == "custom-e2e"
     monkeypatch.setenv("POLARIS_E2E_NAMESPACE", " ")
-    assert support.e2e_namespace() == "python-agentscope-e2e"
+    assert support.e2e_namespace() == "polaris-python-ai-integration"
     monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "default")
     with pytest.raises(ValueError, match="isolated E2E namespace"):
         support.e2e_namespace()
@@ -221,6 +243,58 @@ def test_cleanup_cannot_signal_reused_pid(example_tree):
     )
     found, stale = manager.owned_processes(example_tree)
     assert not found and len(stale) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable symlink regression")
+def test_process_identity_allows_executable_symlink_resolution(tmp_path):
+    executable = Path(sys.executable).resolve()
+    launcher = tmp_path / "python"
+    launcher.symlink_to(executable)
+    assert manager.same_process_command(
+        [str(launcher), "example.py", "--flag"],
+        [str(executable), "example.py", "--flag"],
+    )
+    assert manager.same_process_command(
+        ["/opt/framework/Python.app/Contents/MacOS/Python", "example.py", "--flag"],
+        [str(launcher), "example.py", "--flag"],
+    )
+    assert not manager.same_process_command(
+        [str(launcher), "example.py", "--flag"],
+        [str(executable), "example.py", "--different"],
+    )
+
+
+def test_cleanup_terminates_recorded_retained_process(example_tree):
+    directory = example_tree / "agentscope/a2a"
+    entry = manager.EXAMPLES / "agentscope/a2a/provider/main.py"
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("", encoding="utf-8")
+    options = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        **options,
+    )
+    try:
+        record = support.record_external_process(
+            directory,
+            psutil.Process(process.pid),
+            entry,
+        )
+        found, stale = manager.owned_processes(directory)
+        assert [item[0].pid for item in found] == [process.pid]
+        assert not stale
+
+        manager.cleanup(directory, SimpleNamespace(force=True, dry_run=False))
+        process.wait(timeout=5)
+        assert not record.exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def test_verification_tee_preserves_standard_stream_methods():
@@ -326,7 +400,29 @@ def test_real_event_endpoint_handles_ipv6_and_sdk_service_token_priority():
         assert required_environment("a2a") == ("registry:8091", "e2e")
 
 
-def test_remote_cleanup_filters_ai_prefix_and_namespace(monkeypatch):
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "a2a",
+        "a2a-streaming",
+        "a2a-state-resume",
+        "a2a-skill",
+        "mcp-agent",
+        "agent-service",
+    ],
+)
+def test_real_service_name_uses_compact_microsecond_timestamp(kind):
+    pytest.importorskip("agentscope.tool")
+    pytest.importorskip("a2a.server.routes")
+    from integration.scenarios import service_name
+
+    name = service_name(kind)
+    match = re.fullmatch(rf"agentscope-{kind}-(\d{{20}})", name)
+    assert match is not None
+    datetime.strptime(match.group(1), "%Y%m%d%H%M%S%f")
+
+
+def test_remote_cleanup_filters_agentscope_prefix_and_namespace(monkeypatch):
     class Response:
         def __enter__(self):
             return self
@@ -340,20 +436,23 @@ def test_remote_cleanup_filters_ai_prefix_and_namespace(monkeypatch):
                     "code": 200000,
                     "services": [
                         {
-                            "namespace": "python-agentscope-e2e",
-                            "name": "polaris-python-ai-e2e-agent",
+                            "namespace": "polaris-python-ai-integration",
+                            "name": "agentscope-agent",
                         },
-                        {"namespace": "python-agentscope-e2e", "name": "polaris-python-e2e-agent"},
-                        {"namespace": "python-agentscope-e2e", "name": "mounted-agent"},
-                        {"namespace": "other", "name": "polaris-python-ai-e2e-agent"},
+                        {
+                            "namespace": "polaris-python-ai-integration",
+                            "name": "other-prefix-agent",
+                        },
+                        {"namespace": "polaris-python-ai-integration", "name": "mounted-agent"},
+                        {"namespace": "other", "name": "agentscope-agent"},
                     ],
                 }
             ).encode()
 
     monkeypatch.setenv("POLARIS_SERVER_ADDRESS", "registry:8091")
-    monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "python-agentscope-e2e")
+    monkeypatch.setenv("POLARIS_E2E_NAMESPACE", "polaris-python-ai-integration")
     monkeypatch.setattr(manager.urllib.request, "urlopen", lambda *args, **kwargs: Response())
-    assert manager.test_services()[2] == ["polaris-python-ai-e2e-agent"]
+    assert manager.test_services()[2] == ["agentscope-agent"]
 
 
 def test_remote_service_deletion_deregisters_stale_instances_first(monkeypatch):
@@ -379,14 +478,14 @@ def test_remote_service_deletion_deregisters_stale_instances_first(monkeypatch):
 
     assert manager.delete_test_services(
         "http://registry:8090",
-        "python-agentscope-e2e",
-        ["polaris-python-ai-e2e-service"],
-    ) == ["polaris-python-ai-e2e-service"]
+        "polaris-python-ai-integration",
+        ["agentscope-service"],
+    ) == ["agentscope-service"]
     assert calls == [
         (
             "http://registry:8090",
-            "python-agentscope-e2e",
-            ("polaris-python-ai-e2e-service",),
+            "polaris-python-ai-integration",
+            ("agentscope-service",),
             "service-token",
         )
     ]

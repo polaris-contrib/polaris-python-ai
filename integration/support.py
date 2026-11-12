@@ -27,7 +27,7 @@ from pathlib import Path
 
 import psutil
 
-DEFAULT_E2E_NAMESPACE = "python-agentscope-e2e"
+DEFAULT_E2E_NAMESPACE = "polaris-python-ai-integration"
 _tracked = set()
 
 

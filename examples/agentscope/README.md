@@ -69,7 +69,9 @@ adapter deregistration and SDK heartbeat cleanup. `--host` is the reachable
 business address; `--port` defaults to 8080. `--registration-port` defaults to
 `1` and is an instance identity, not the callable A2A port. `--multi-interface`
 exposes JSONRPC and HTTP+JSON on the same listener while registering one
-instance. Metadata is `ai-agent-name`, `ai-agent-card`, and `ai-a2a-version`;
+instance. `--multi-protocol` serves JSONRPC 1.0, JSONRPC 0.3 and HTTP+JSON 1.0
+with one instance IP. Real verification with `--retain` keeps the process alive
+until integration cleanup. Metadata is `ai-agent-name`, `ai-agent-card`, and `ai-a2a-version`;
 the instance protocol remains empty. For authentication, set connector
 `POLARIS_TOKEN` independently from `POLARIS_SERVICE_TOKEN`.
 

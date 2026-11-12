@@ -42,7 +42,7 @@ EXAMPLES = REPO / "examples"
 CASES_ROOT = INTEGRATION / "cases"
 CASES_SCRIPT = INTEGRATION / "scenarios.py"
 TERMINATE_GRACE_SECONDS = 10
-E2E_SERVICE_PREFIX = "polaris-python-ai-e2e-"
+E2E_SERVICE_PREFIX = "agentscope-"
 LEGACY_EXAMPLES_ENV = "POLARIS_INTEGRATION_LEGACY_EXAMPLES"
 VERIFIERS = {
     "agentscope/a2a": ["--demo", "a2a"],
@@ -117,6 +117,22 @@ def contained(path, root):
     return path.is_relative_to(root)
 
 
+def same_process_command(recorded, actual):
+    """Compare argv while allowing Python launcher symlinks to resolve differently."""
+    recorded = list(recorded)
+    actual = list(actual)
+    if recorded == actual:
+        return True
+    if len(recorded) < 2 or recorded[1:] != actual[1:]:
+        return False
+    # macOS framework Python may re-exec as ``.../Python.app/.../Python``;
+    # PID creation time and the complete argument vector remain the identity.
+    return (
+        Path(recorded[0]).name.lower().startswith("python")
+        and Path(actual[0]).name.lower().startswith("python")
+    )
+
+
 def directories(scope):
     return [
         CASES_ROOT / name
@@ -159,7 +175,7 @@ def verification_targets(name, only, groups=None):
     return list(dict.fromkeys(selected))
 
 
-def run_process(directory, entry, arguments, action, timeout):
+def run_process(directory, entry, arguments, action, timeout, retain=False):
     run = new_run_directory(directory, action)
     work = run / "work"
     work.mkdir()
@@ -170,6 +186,10 @@ def run_process(directory, entry, arguments, action, timeout):
         PYTHONUNBUFFERED="1",
         PYTHONDONTWRITEBYTECODE="1",
     )
+    if retain:
+        env["POLARIS_E2E_RETAIN"] = "1"
+    else:
+        env.pop("POLARIS_E2E_RETAIN", None)
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, [str(REPO / "src"), str(REPO), env.get("PYTHONPATH", "")])
     )
@@ -488,7 +508,7 @@ def owned_processes(scope):
                     process.pid in (os.getpid(), os.getppid())
                     or not (contained(entry, EXAMPLES) or contained(entry, INTEGRATION))
                     or abs(process.create_time() - data["created"]) > 0.01
-                    or process.cmdline() != data["command"]
+                    or not same_process_command(process.cmdline(), data["command"])
                 ):
                     stale.append(record)
                     continue
@@ -600,6 +620,11 @@ def main():
     verify_e2e.add_argument(
         "--timeout", type=float, default=300, help="seconds per demo; default 300"
     )
+    verify_e2e.add_argument(
+        "--retain",
+        action="store_true",
+        help="keep the A2A provider process running after successful verification",
+    )
     logs = commands.add_parser("logs", help="list retained console and SDK logs")
     logs.add_argument("--tail", type=int, default=0, help="show the last N lines of each file")
     logs.add_argument("--follow", "-f", action="store_true")
@@ -624,7 +649,7 @@ def main():
         "--remote",
         dest="delete_services",
         action="store_true",
-        help="delete only polaris-python-ai-e2e services in POLARIS_E2E_NAMESPACE",
+        help="delete only agentscope services in POLARIS_E2E_NAMESPACE",
     )
     args = parser.parse_args()
     directory = args.directory.resolve()
@@ -646,11 +671,21 @@ def main():
             parser.error("--timeout must be between 0 and 3600 seconds")
         if args.action == "verify-e2e":
             targets = verification_targets(name, args.only, groups=REAL_GROUPS)
+            if args.retain and targets not in (
+                ["agentscope/a2a"],
+                ["agentscope/a2a/provider"],
+            ):
+                parser.error("--retain requires exactly one A2A provider target")
             failed = []
             for target in targets:
                 arguments = REAL_VERIFIERS[target]
                 code = run_process(
-                    CASES_ROOT / target, CASES_SCRIPT, arguments, "verify-e2e", args.timeout
+                    CASES_ROOT / target,
+                    CASES_SCRIPT,
+                    arguments,
+                    "verify-e2e",
+                    args.timeout,
+                    retain=args.retain,
                 )
                 if code:
                     failed.append(target)

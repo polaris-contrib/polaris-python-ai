@@ -12,7 +12,6 @@
 python examples/agentscope/a2a/streaming_provider/main.py \
   --address 127.0.0.1:8091 \
   --service streaming-agent \
-  --registration-port 1 \
   --skill-source none
 ```
 

@@ -39,6 +39,9 @@ SDK 日志和缓存按运行、组件隔离，关闭扩展不销毁借用的 Con
 `--registration-port`；未指定 host 时使用连接 Polaris 的本机源 IP。
 实例默认注册端口为 `1`，真实调用端口保留在 AgentCard interface URL 中。
 `--multi-interface` 会在同一端口同时暴露 JSONRPC 和 HTTP+JSON，仍只注册一个实例。
+`--multi-protocol` 会同时暴露 JSONRPC 1.0、JSONRPC 0.3 和 HTTP+JSON 1.0，
+三个接口共享同一实例 IP，仍只注册一个实例。真实验证增加 `--retain` 后进程持续
+运行，直到执行 integration cleanup。
 实例 metadata 为 `ai-agent-name`、`ai-agent-card`、`ai-a2a-version`，
 `Instance.protocol` 为空。自动心跳复用 ProviderAPI。
 Consumer 调用官方 A2AAgent，预期输出 `Echo: Hello Polaris`。

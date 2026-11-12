@@ -44,7 +44,14 @@ async def main(argv=None):
     arguments.add_argument("--port", type=int, default=8080)
     arguments.add_argument("--ttl", type=int, default=5)
     arguments.add_argument("--registration-port", type=int, default=1)
-    arguments.add_argument("--multi-interface", action="store_true")
+    interfaces = arguments.add_mutually_exclusive_group()
+    interfaces.add_argument("--multi-interface", action="store_true")
+    interfaces.add_argument(
+        "--multi-protocol",
+        action="store_true",
+        help="serve JSONRPC 1.0, JSONRPC 0.3 and HTTP+JSON 1.0 interfaces",
+    )
+    arguments.add_argument("--agent-version", default="1.0.0")
     arguments.add_argument(
         "--skill-source", choices=("none", "published", "mounted"), default="none"
     )
@@ -103,6 +110,8 @@ async def main(argv=None):
                     agent=agent,
                     skills=skills,
                     multi_interface=args.multi_interface,
+                    multi_protocol=args.multi_protocol,
+                    version=args.agent_version,
                 )
                 server = uvicorn.Server(uvicorn.Config(app, log_level="info"))
                 serving = asyncio.create_task(server.serve(sockets=[listener]))

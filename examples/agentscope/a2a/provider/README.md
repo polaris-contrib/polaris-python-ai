@@ -5,10 +5,10 @@ Run from the project root after installing the example dependencies:
 ```bash
 python -m examples.agentscope.a2a.provider.main \
   --address <host>:8091 \
-  --service echo-agent \
+  --service order-agent \
   --host <reachable-ip> \
-  --registration-port 1 \
-  --multi-interface
+  --multi-protocol \
+  --agent-version 2.1.0
 ./integration/verify.sh --only agentscope/a2a/provider
 ```
 
@@ -24,8 +24,24 @@ are kept per run. See [test.md](/integration/cases/agentscope/a2a/provider/test.
 listener port stored in the AgentCard URL.
 `--multi-interface` serves JSONRPC and HTTP+JSON on the same listener while
 still registering exactly one Polaris instance.
+`--multi-protocol` serves JSONRPC 1.0 at `/a2a/v1`, JSONRPC 0.3 at
+`/a2a/legacy`, and HTTP+JSON 1.0 at `/rest`. All URLs use the same instance IP
+and still produce one Polaris instance. GRPC is not advertised until the
+example has a callable gRPC server.
+
+To verify and retain the registered Provider until cleanup:
+
+```bash
+./integration/verify_e2e.sh --only agentscope/a2a/provider --retain
+./integration/cleanup.sh --dry-run
+./integration/cleanup.sh --force
+```
+
+`--retain` launches the Provider as an independently recorded process. After
+verification it keeps heartbeating until cleanup terminates it; graceful
+termination deregisters the instance.
 
 To run parallel v1/v2 instances on one IP, give the processes distinct
-registration ports, such as `--registration-port 1` and
-`--registration-port 18080`. The value controls instance identity and
+registration ports: omit the option for the first process to use the default `1`,
+and use `--registration-port 18080` for the second. The value controls instance identity and
 replacement, not the callable port in the AgentCard.
