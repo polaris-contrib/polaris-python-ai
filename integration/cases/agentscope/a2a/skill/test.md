@@ -47,5 +47,6 @@ Pushgateway 不由脚本拉起，离线使用同进程 Stub。
 
 真实需 `POLARIS_SERVER_ADDRESS`；Skill 名称可由 `POLARIS_SKILL_NAME` 指定，
 未设则自动查询已发布或挂载列表。服务 token 仅在开启鉴权时需要。
-产物位于本 case 的 `.logs/<run>/`，包含控制台、验证结果及 AI a2a/skill/agentscope 日志。
+产物位于本 case 的 `.logs/<run>/`，包含 `console.log`、`verification.log`、
+`result.json` 及 AI a2a/skill/agentscope 日志。
 源码：`integration/scenarios.py::verify_skill_a2a`。

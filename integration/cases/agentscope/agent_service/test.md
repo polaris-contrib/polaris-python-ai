@@ -38,6 +38,7 @@ Skill loader 和按 session 创建的本地 Agent；验证器的 HTTP 请求在�
 
 这是 HTTP 客户端 → 本机 Agent Service 与 Agent → Skill RPC 两条链路。
 不覆盖远端 Consumer 的跨主机访问，也没有独立端口关闭探针；最终检查 Context
-后台线程停止。保留控制台、验证结果、ready 文件及 Core/AI 分类日志。
+后台线程停止。每次运行保留 `console.log`、`verification.log`、`result.json`、
+ready 文件及 Core/AI 分类日志。
 
 源码：`integration/scenarios.py::verify_agent_service`。
