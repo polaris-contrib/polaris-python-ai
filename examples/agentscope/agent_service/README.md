@@ -7,7 +7,7 @@ Polaris, exposes `/health` and `/chat`, and can load published Polaris Skills.
 ```bash
 python -m examples.agentscope.agent_service.main \
   --address 127.0.0.1:8091 \
-  --namespace python-agentscope-e2e \
+  --namespace polaris-python-ai-integration \
   --load-skills \
   --skill-name self-improvement
 ```

@@ -24,12 +24,11 @@ from contextlib import asynccontextmanager
 import uvicorn
 from a2a.types import AgentSkill
 
-from examples._internal._runtime import get_local_host
+from examples._support import get_local_host
 from examples.agentscope._common import ai_logging, context, parser
 from examples.agentscope.a2a.provider.server import create_server
 from examples.agentscope.a2a.provider.skill_agent import create_skill_agent
 from polaris_ai.agentscope import (
-    A2ATransport,
     PolarisA2ARegistrar,
     PolarisA2AServerRegistration,
     PolarisSkillLoader,
@@ -44,6 +43,15 @@ async def main(argv=None):
     arguments.add_argument("--host")
     arguments.add_argument("--port", type=int, default=8080)
     arguments.add_argument("--ttl", type=int, default=5)
+    arguments.add_argument("--registration-port", type=int, default=1)
+    interfaces = arguments.add_mutually_exclusive_group()
+    interfaces.add_argument("--multi-interface", action="store_true")
+    interfaces.add_argument(
+        "--multi-protocol",
+        action="store_true",
+        help="serve JSONRPC 1.0, JSONRPC 0.3 and HTTP+JSON 1.0 interfaces",
+    )
+    arguments.add_argument("--agent-version", default="1.0.0")
     arguments.add_argument(
         "--skill-source", choices=("none", "published", "mounted"), default="none"
     )
@@ -97,7 +105,13 @@ async def main(argv=None):
         async with ai_logging(sdk, entry=__file__):
             async with skill_agent() as (agent, skills):
                 app, card = create_server(
-                    args.service, f"http://{endpoint_host}:{port}/", agent=agent, skills=skills
+                    args.service,
+                    f"http://{endpoint_host}:{port}/",
+                    agent=agent,
+                    skills=skills,
+                    multi_interface=args.multi_interface,
+                    multi_protocol=args.multi_protocol,
+                    version=args.agent_version,
                 )
                 server = uvicorn.Server(uvicorn.Config(app, log_level="info"))
                 serving = asyncio.create_task(server.serve(sockets=[listener]))
@@ -113,12 +127,13 @@ async def main(argv=None):
                         args.namespace,
                         service_token=args.service_token,
                         ttl=args.ttl,
+                        registration_port=args.registration_port,
                     ),
                     card,
-                    [A2ATransport(args.host, port)],
                 ):
                     print(
-                        f"Registered {args.namespace}/{args.service} at {args.host}:{port}",
+                        f"Registered {args.namespace}/{args.service} "
+                        f"at {args.host}:{port} with registrationPort={args.registration_port}",
                         flush=True,
                     )
                     await asyncio.shield(serving)

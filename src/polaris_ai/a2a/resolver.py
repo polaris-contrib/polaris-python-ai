@@ -19,7 +19,6 @@ import asyncio
 from dataclasses import dataclass
 from threading import RLock
 
-from google.protobuf.json_format import ParseError
 from polaris.api.consumer import ConsumerAPI
 from polaris.pkg.model.error import SDKError
 from polaris.pkg.model.service import GetHealthyInstancesRequest
@@ -27,7 +26,13 @@ from polaris.pkg.model.service import GetHealthyInstancesRequest
 from polaris_ai._async import await_completion
 from polaris_ai.log import get_ai_logger
 
-from ._card import META_AGENT_CARD, AgentCard, decode_card
+from ._card import (
+    META_A2A_VERSION,
+    META_AGENT_CARD,
+    AgentCard,
+    normalize_ip_address,
+    prepare_agent_card,
+)
 
 
 class AgentCardNotFoundError(LookupError):
@@ -105,10 +110,13 @@ class PolarisA2AResolver:
                           if (i.get_host(), i.get_port()) == (cached.host, cached.port)]
                 instances = sticky + [i for i in instances if i not in sticky]
             for instance in instances:
-                payload = instance.get_metadata().get(META_AGENT_CARD, "")
+                metadata = instance.get_metadata()
+                payload = metadata.get(META_AGENT_CARD, "")
+                a2a_version = metadata.get(META_A2A_VERSION, "")
                 try:
-                    card = decode_card(payload)
-                except (ValueError, TypeError, ParseError) as error:
+                    prepared = prepare_agent_card(payload, a2a_version=a2a_version)
+                    card = prepared.card
+                except (ValueError, TypeError) as error:
                     self.logger.warning_throttled(
                         ("invalid-card", agent_name, instance.get_host(), instance.get_port()),
                         "Skipping invalid AgentCard for %s at %s:%s: %s",
@@ -119,6 +127,31 @@ class PolarisA2AResolver:
                     self.logger.warning_throttled(
                         ("wrong-name", agent_name, instance.get_host(), instance.get_port()),
                         "Skipping AgentCard %r while resolving %r", card.name, agent_name,
+                    )
+                    continue
+                try:
+                    instance_host = normalize_ip_address(instance.get_host())
+                except ValueError as error:
+                    self.logger.warning_throttled(
+                        ("invalid-host", agent_name, instance.get_host(), instance.get_port()),
+                        "Skipping instance with invalid host for %s: %s",
+                        agent_name,
+                        error,
+                    )
+                    continue
+                if prepared.host != instance_host:
+                    self.logger.warning_throttled(
+                        ("host-mismatch", agent_name, instance.get_host(), instance.get_port()),
+                        "Skipping AgentCard whose interface host does not match instance %s",
+                        instance_host,
+                    )
+                    continue
+                if instance.get_version() != card.version:
+                    self.logger.warning_throttled(
+                        ("version-mismatch", agent_name, instance.get_host(), instance.get_port()),
+                        "Skipping AgentCard version %s for instance version %s",
+                        card.version,
+                        instance.get_version(),
                     )
                     continue
                 if not any(i.url.strip() and i.protocol_binding.strip()

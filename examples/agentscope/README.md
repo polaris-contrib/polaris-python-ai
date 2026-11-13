@@ -3,10 +3,10 @@
 Run commands from the project root after installing `.[agentscope,a2a]` and the
 development group. The A2A echo server needs no model API key.
 
-Run all offline integration scenarios with `./examples/verify.sh`, or select
+Run all offline integration scenarios with `./integration/verify.sh`, or select
 `--only agentscope/a2a` / `--only agentscope/skill`. Real-registry checks use
-`./examples/verify_e2e.sh`; prerequisites, retained logs and cleanup commands
-are documented in [../test.md](../test.md).
+`./integration/verify_e2e.sh`; prerequisites, retained logs and cleanup commands
+are documented in [../test.md](/integration/cases/agentscope/test.md).
 
 `agentscope/a2a/skill` runs the complete model-free chain with both published
 and mounted Skills: load an AgentScope `Agent`, expose it through A2A, discover
@@ -66,7 +66,13 @@ python -m examples.agentscope.a2a.consumer.main --address 127.0.0.1:8091 --messa
 
 Expected reply: `Echo: Hello Polaris`. Gracefully stop the provider to exercise
 adapter deregistration and SDK heartbeat cleanup. `--host` is the reachable
-business address; `--port` defaults to 8080. For authentication, set connector
+business address; `--port` defaults to 8080. `--registration-port` defaults to
+`1` and is an instance identity, not the callable A2A port. `--multi-interface`
+exposes JSONRPC and HTTP+JSON on the same listener while registering one
+instance. `--multi-protocol` serves JSONRPC 1.0, JSONRPC 0.3 and HTTP+JSON 1.0
+with one instance IP. Real verification with `--retain` keeps the process alive
+until integration cleanup. Metadata is `ai-agent-name`, `ai-agent-card`, and `ai-a2a-version`;
+the instance protocol remains empty. For authentication, set connector
 `POLARIS_TOKEN` independently from `POLARIS_SERVICE_TOKEN`.
 
 Add `--skill-source published --skill-name weather`, or

@@ -98,14 +98,24 @@ def snapshot(instances=(), mounts=(), *, offline=False):
     return ServiceInstances(service=service, instances=list(instances))
 
 
-def instance(host, payload, *, healthy=True, isolated=False):
+def instance(
+    host,
+    payload,
+    *,
+    version="1.0",
+    a2a_version="1.0",
+    healthy=True,
+    isolated=False,
+):
     raw = service_pb2.Instance()
     raw.id.value = host
     raw.host.value = host
     raw.port.value = 8080
+    raw.version.value = version
     raw.healthy.value = healthy
     raw.isolate.value = isolated
-    raw.metadata["a2a.agent.card"] = payload
+    raw.metadata["ai-agent-card"] = payload
+    raw.metadata["ai-a2a-version"] = a2a_version
     return Instance(raw, ServiceKey("default", "weather-agent"))
 
 

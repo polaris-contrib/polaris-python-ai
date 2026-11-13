@@ -4,11 +4,11 @@
 
 ```bash
 python -m examples.agentscope.skill.published.main --address <host>:8091 --name weather --version v1
-make -C examples/agentscope/skill/published verify
+./integration/verify.sh --only agentscope/skill/published
 ```
 
 安装依赖后从项目根目录执行。YAML 启动传
 `--config examples/agentscope/polaris.yaml`，纯代码启动传 `--address`。
 `make build` 生成 `bin`；`make package` 生成带共享脚手架的
 `.build/published.tar.gz`；`make clean` 清理构建产物。
-日志和备份按运行保留；验证条件见 [test.md](test.md)。
+日志和备份按运行保留；验证条件见 [test.md](/integration/cases/agentscope/skill/published/test.md)。

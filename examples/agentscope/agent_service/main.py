@@ -30,7 +30,7 @@ from polaris.api.provider import ProviderAPI
 from polaris.pkg.model.server import InstanceDeRegisterRequest, InstanceRegisterRequest
 from pydantic import BaseModel, Field
 
-from examples._internal._runtime import get_local_host
+from examples._support import get_local_host
 from examples.agentscope._common import ai_logging, context, parser
 from examples.agentscope._mock import DemoChatModel
 from polaris_ai.agentscope import PolarisDynamicSkillMiddleware, PolarisSkillLoader

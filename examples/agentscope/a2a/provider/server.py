@@ -17,9 +17,14 @@
 
 from a2a.server.agent_execution import AgentExecutor
 from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+from a2a.server.routes import (
+    create_agent_card_routes,
+    create_jsonrpc_routes,
+    create_rest_routes,
+)
 from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
 from a2a.types import (
+    AgentInterface,
     AgentSkill,
     Part,
     Task,
@@ -38,13 +43,17 @@ class ReplyExecutor(AgentExecutor):
 
     async def execute(self, context, event_queue):
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
-        await event_queue.enqueue_event(Task(
-            id=context.task_id, context_id=context.context_id,
-            status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
-        ))
+        await event_queue.enqueue_event(
+            Task(
+                id=context.task_id,
+                context_id=context.context_id,
+                status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+            )
+        )
         await updater.start_work()
         await updater.add_artifact(
-            [Part(text=await self.reply(context.get_user_input()))], last_chunk=True,
+            [Part(text=await self.reply(context.get_user_input()))],
+            last_chunk=True,
         )
         await updater.complete()
 
@@ -52,12 +61,58 @@ class ReplyExecutor(AgentExecutor):
         await TaskUpdater(event_queue, context.task_id, context.context_id).cancel()
 
 
-def create_server(service: str, base_url: str, agent=None, skills=None):
+def create_server(
+    service: str,
+    base_url: str,
+    agent=None,
+    skills=None,
+    *,
+    multi_interface=False,
+    multi_protocol=False,
+    version="1.0.0",
+):
+    if multi_interface and multi_protocol:
+        raise ValueError("multi_interface and multi_protocol are mutually exclusive")
+    endpoint_root = base_url.rstrip("/")
+    interfaces = None
+    if multi_protocol:
+        interfaces = [
+            AgentInterface(
+                url=f"{endpoint_root}/a2a/v1",
+                protocol_binding="JSONRPC",
+                tenant=service,
+                protocol_version="1.0",
+            ),
+            AgentInterface(
+                url=f"{endpoint_root}/a2a/legacy",
+                protocol_binding="JSONRPC",
+                protocol_version="0.3",
+            ),
+            AgentInterface(
+                url=f"{endpoint_root}/rest",
+                protocol_binding="HTTP+JSON",
+                protocol_version="1.0",
+            ),
+        ]
+    elif multi_interface:
+        interfaces = [
+            AgentInterface(
+                url=base_url,
+                protocol_binding="JSONRPC",
+                protocol_version="1.0",
+            ),
+            AgentInterface(
+                url=base_url.rstrip("/") + "/rest",
+                protocol_binding="HTTP+JSON",
+                protocol_version="1.0",
+            ),
+        ]
     card = build_agent_card(
         name=service,
-        url=base_url,
+        url=None if interfaces else base_url,
+        interfaces=interfaces,
         description="Model-free AgentScope integration verification",
-        version="1.0.0",
+        version=version,
         skills=(
             [AgentSkill(id="echo", name="Echo", description="Echo input", tags=["example"])]
             if skills is None
@@ -65,16 +120,42 @@ def create_server(service: str, base_url: str, agent=None, skills=None):
         ),
     )
     if agent is None:
+
         async def reply(text):
             return "Echo: " + text
     else:
+
         async def reply(text):
             response = await agent.reply(UserMsg(name="user", content=text))
             return response.get_text_content()
+
     handler = DefaultRequestHandler(
-        agent_executor=ReplyExecutor(reply), task_store=InMemoryTaskStore(), agent_card=card,
+        agent_executor=ReplyExecutor(reply),
+        task_store=InMemoryTaskStore(),
+        agent_card=card,
     )
-    app = Starlette(routes=[
-        *create_agent_card_routes(card), *create_jsonrpc_routes(handler, rpc_url="/"),
-    ])
+    routes = [
+        *create_agent_card_routes(card),
+    ]
+    if multi_protocol:
+        routes.extend(
+            create_jsonrpc_routes(
+                handler,
+                rpc_url="/a2a/v1",
+                enable_v0_3_compat=True,
+            )
+        )
+        routes.extend(
+            create_jsonrpc_routes(
+                handler,
+                rpc_url="/a2a/legacy",
+                enable_v0_3_compat=True,
+            )
+        )
+        routes.extend(create_rest_routes(handler, path_prefix="/rest"))
+    else:
+        routes.extend(create_jsonrpc_routes(handler, rpc_url="/"))
+    if multi_interface:
+        routes.extend(create_rest_routes(handler, path_prefix="/rest"))
+    app = Starlette(routes=routes)
     return app, card

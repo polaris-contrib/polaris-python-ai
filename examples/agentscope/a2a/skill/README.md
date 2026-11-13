@@ -6,7 +6,7 @@ it through A2A, and registers the endpoint in Polaris. The consumer discovers
 the card and keeps one native A2A client for a multi-turn conversation.
 
 ```bash
-../../verify.sh --only agentscope/a2a/skill
+./integration/verify.sh --only agentscope/a2a/skill
 ```
 
 Manual provider:

@@ -1,49 +1,40 @@
 # 集成示例
 
-在项目根目录安装 Python 3.12+ 和示例依赖：
+本目录只包含可直接运行的 AgentScope 集成示例，作为应用开发者的可执行文档。
+验证编排、Registry stub、断言、fixture 和清理逻辑统一放在
+[`../integration`](../integration)。
+
+安装 Python 3.12+ 和示例依赖：
 
 ```bash
 uv sync --all-extras
-./examples/verify.sh
-./examples/verify.sh --only agentscope/skill
-./examples/verify.sh --only agentscope/a2a/skill
-./examples/verify.sh --only agentscope/mcp
-./examples/verify.sh --only agentscope/runtime
-./examples/verify.sh --only agentscope/a2a/streaming_provider
-./examples/verify.sh --only agentscope/mcp/agent
-./examples/verify.sh --only agentscope/agent_service
 ```
 
-脚本优先使用 `POLARIS_PYTHON`，其次使用项目 `.venv/bin/python`，
-然后使用 uv 或 python3。入口不依赖当前工作目录。
-
-离线验证使用真实 SDK、AgentScope Toolkit 和 A2AAgent，只替换 Polaris
-gRPC 边界。A2A 启动本机动态端口的 JSON-RPC/SSE Echo 服务，无需模型密钥。
-新增示例还覆盖 MCP Tool、A2A 会话恢复、Skill Console、多 Agent Runtime
-共享和精简 FastAPI Agent Service。
-
-真实 Polaris 验证：
+直接运行示例：
 
 ```bash
-export POLARIS_SERVER_ADDRESS=<host>:8091
-export POLARIS_SERVICE_TOKEN=<service-token>
-export POLARIS_E2E_NAMESPACE=python-agentscope-e2e
-export POLARIS_SKILL_NAME=<published-skill>
-export POLARIS_AGENT_SERVICE=<service-with-mounted-skills>
-./examples/verify_e2e.sh
+python -m examples.agentscope.a2a.provider.main --address 127.0.0.1:8091
+python -m examples.agentscope.a2a.consumer.main --address 127.0.0.1:8091
+python -m examples.agentscope.skill.published.main --address 127.0.0.1:8091
+python -m examples.agentscope.mcp.agent.main --address 127.0.0.1:8091
+python -m examples.agentscope.agent_service.main --address 127.0.0.1:8091
 ```
 
-命名空间默认 `python-agentscope-e2e`，由 `POLARIS_E2E_NAMESPACE` 覆盖；
-`default` 会被拒绝。
-Skill 需事先发布或挂载；脚本只读。A2A 测试退出前反注册实例。
-每个场景保留独立的日志、断言、结果、SDK 日志、`polaris/log/ai/` AI 分类日志与备份目录。
+每个可运行目录的 Makefile 提供 `build`、`run`、`package` 和 `clean`：
 
 ```bash
-./examples/logs.sh --latest --tail 50
-./examples/cleanup.sh --dry-run
-./examples/cleanup.sh --force
-make -C examples verify ARGS="--only agentscope/a2a"
+make -C examples/agentscope/a2a/provider run ARGS="--address 127.0.0.1:8091"
+make -C examples/agentscope/mcp/agent run ARGS="--address 127.0.0.1:8091"
 ```
 
-含 `main.py` 的目录均提供 `build/run/package/clean/verify/verify-e2e`。
-打包包含共享脚手架和扩展源码。验证细节和环境变量见 [test.md](test.md)。
+示例覆盖：
+
+- A2A Provider/Consumer、流式调用、状态恢复和 Skill-backed Agent。
+- MCP 元数据解析，以及包含真实 Tool 调用的自包含 MCP Agent。
+- Published、Mounted 和 Console Skill 使用方式。
+- 单 Agent 与多 Agent Runtime 装配。
+- 提供 `/health` 和 `/chat` 的 FastAPI Agent Service。
+
+离线与真实服务验证命令见
+[`integration/README.md`](../integration/README.md)。验证、日志和清理命令统一从
+`integration/` 执行。

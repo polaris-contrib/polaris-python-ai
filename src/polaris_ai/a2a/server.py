@@ -23,6 +23,8 @@ import inspect
 
 from polaris_ai._async import await_completion
 
+from ._card import A2A_VERSION_10
+
 
 class PolarisA2AServerRegistration:
     """Register an A2A endpoint after its server becomes ready.
@@ -33,14 +35,23 @@ class PolarisA2AServerRegistration:
     trigger deregistration.
     """
 
-    def __init__(self, registrar, agent_card, transports, *, server_ready=None):
+    def __init__(
+        self,
+        registrar,
+        agent_card,
+        transports=None,
+        *,
+        a2a_version: str = A2A_VERSION_10,
+        server_ready=None,
+    ):
         if registrar is None:
             raise ValueError("A PolarisA2ARegistrar is required")
         if agent_card is None:
             raise ValueError("An AgentCard is required")
         self._registrar = registrar
         self._agent_card = agent_card
-        self._transports = tuple(transports)
+        self._transports = None if transports is None else tuple(transports)
+        self._a2a_version = a2a_version
         self._server_ready = server_ready
         self._lock = asyncio.Lock()
         self._registered = False
@@ -74,7 +85,11 @@ class PolarisA2AServerRegistration:
             if self._registered:
                 return self
             await self._wait_for_server()
-            await self._registrar.async_register(self._agent_card, self._transports)
+            await self._registrar.async_register(
+                self._agent_card,
+                self._transports,
+                a2a_version=self._a2a_version,
+            )
             self._registered = True
             return self
 

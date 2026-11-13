@@ -16,6 +16,7 @@
 import pytest
 
 from polaris_ai.agentscope import PolarisAgentConfig
+from polaris_ai.agentscope.config import PolarisA2ARegistryConfig
 
 
 def test_env_values_take_precedence_and_fall_back_to_sdk_variables():
@@ -35,6 +36,7 @@ def test_env_values_take_precedence_and_fall_back_to_sdk_variables():
             "POLARIS_AI_A2A_REGISTRY_ENABLED": "true",
             "POLARIS_AI_A2A_DISCOVERY_ENABLED": "false",
             "POLARIS_AI_A2A_TTL": "7",
+            "POLARIS_AI_A2A_REGISTRATION_PORT": "18080",
             "POLARIS_AI_MCP_ENABLED": "true",
             "POLARIS_AI_MCP_PROTOCOL_VERSION": "2025-06-18",
             "POLARIS_AI_MCP_SCHEME": "https",
@@ -62,6 +64,7 @@ def test_env_values_take_precedence_and_fall_back_to_sdk_variables():
     assert config.a2a.registry.enabled
     assert not config.a2a.discovery.enabled
     assert config.a2a.registry.ttl == 7
+    assert config.a2a.registry.registration_port == 18080
     assert config.mcp.enabled
     assert config.mcp.protocol_version == "2025-06-18"
     assert config.mcp.scheme == "https"
@@ -113,3 +116,14 @@ def test_invalid_environment_scalars_are_rejected():
         PolarisAgentConfig.from_env({"POLARIS_AI_SKILL_LIST_REFRESH_INTERVAL_SECONDS": "never"})
     with pytest.raises(ValueError, match="name=value"):
         PolarisAgentConfig.from_env({"POLARIS_AI_MCP_HEADERS": "invalid"})
+    for value in ("0", "65536", "invalid"):
+        with pytest.raises(ValueError):
+            PolarisAgentConfig.from_env({
+                "POLARIS_AI_A2A_REGISTRATION_PORT": value,
+            })
+
+
+def test_registration_port_rejects_invalid_direct_values():
+    for value in (True, 0, -1, 65536):
+        with pytest.raises(ValueError, match="registration_port"):
+            PolarisA2ARegistryConfig(registration_port=value)

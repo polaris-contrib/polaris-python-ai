@@ -55,6 +55,11 @@ jobs:
         env:
           GRPC_VERBOSITY: ERROR
         run: uv run python -m pytest --cov=polaris_ai --cov-report=xml
+      - name: Run offline integration verification
+        working-directory: polaris-python-ai
+        env:
+          GRPC_VERBOSITY: ERROR
+        run: uv run python integration/runner.py --directory integration/cases verify --timeout 180
       - name: Upload coverage reports to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         uses: codecov/codecov-action@v4

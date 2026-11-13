@@ -22,35 +22,99 @@ pytest.importorskip("a2a.server.routes")
 
 import httpx
 from a2a.client import ClientConfig, ClientFactory
+from a2a.types import AgentCard
 from a2a.utils.constants import TransportProtocol
 from agentscope.agent import A2AAgent
 from agentscope.message import UserMsg
 
 from examples.agentscope.a2a.provider.server import create_server
-from polaris_ai.a2a import A2ATransport, PolarisA2ARegistrar, PolarisA2AResolver
+from polaris_ai.a2a import PolarisA2ARegistrar, PolarisA2AResolver
 from tests._support import FakeContext, FakeEngine, instance, snapshot
 
 
 class A2ATransportTests(IsolatedAsyncioTestCase):
     async def test_registered_card_drives_real_jsonrpc_streaming_via_native_agentscope(self):
-        app, card = create_server("weather-agent", "http://a2a.test/")
+        app, card = create_server(
+            "weather-agent",
+            "http://127.0.0.1/",
+            multi_interface=True,
+        )
         engine = FakeEngine()
         context = FakeContext(engine)
         async with PolarisA2ARegistrar(context, service_token="token") as registrar:
-            await registrar.async_register(card, [A2ATransport("a2a.test", 80)])
-            metadata = engine.register_calls[0].metadata["a2a.agent.card"]
-            engine.snapshot = snapshot([instance("a2a.test", metadata)])
+            await registrar.async_register(card)
+            metadata = engine.register_calls[0].metadata["ai-agent-card"]
+            engine.snapshot = snapshot(
+                [
+                    instance("127.0.0.1", metadata, version=card.version),
+                ]
+            )
             async with PolarisA2AResolver(context) as resolver:
                 resolved = await resolver.async_resolve("weather-agent")
+                self.assertEqual(
+                    ["JSONRPC", "HTTP+JSON"],
+                    [item.protocol_binding for item in resolved.supported_interfaces],
+                )
                 async with httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=app), trust_env=False,
+                    transport=httpx.ASGITransport(app=app),
+                    trust_env=False,
                 ) as http_client:
-                    client = ClientFactory(ClientConfig(
-                        streaming=True, polling=False, httpx_client=http_client,
-                        supported_protocol_bindings=[TransportProtocol.JSONRPC],
-                    )).create(resolved)
+                    client = ClientFactory(
+                        ClientConfig(
+                            streaming=True,
+                            polling=False,
+                            httpx_client=http_client,
+                            supported_protocol_bindings=[TransportProtocol.JSONRPC],
+                        )
+                    ).create(resolved)
                     async with A2AAgent(resolved, client=client) as agent:
                         reply = await agent.reply(UserMsg(name="user", content="Hello Polaris"))
                         self.assertEqual("Echo: Hello Polaris", reply.get_text_content())
         self.assertEqual((), registrar.registered)
         self.assertFalse(context.is_destroy())
+
+    async def test_multi_protocol_card_serves_jsonrpc_rest_and_legacy_interfaces(self):
+        app, card = create_server(
+            "order-agent",
+            "http://127.0.0.1:8080/",
+            multi_protocol=True,
+            version="2.1.0",
+        )
+        self.assertEqual("2.1.0", card.version)
+        self.assertEqual(
+            [
+                ("JSONRPC", "1.0", "order-agent"),
+                ("JSONRPC", "0.3", ""),
+                ("HTTP+JSON", "1.0", ""),
+            ],
+            [
+                (item.protocol_binding, item.protocol_version, item.tenant)
+                for item in card.supported_interfaces
+            ],
+        )
+
+        async def call(interface, transport, message):
+            selected = AgentCard()
+            selected.CopyFrom(card)
+            del selected.supported_interfaces[:]
+            selected.supported_interfaces.append(interface)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                trust_env=False,
+            ) as http_client:
+                client = ClientFactory(
+                    ClientConfig(
+                        streaming=True,
+                        polling=False,
+                        httpx_client=http_client,
+                        supported_protocol_bindings=[transport],
+                    )
+                ).create(selected)
+                async with A2AAgent(selected, client=client) as agent:
+                    reply = await agent.reply(UserMsg(name="user", content=message))
+                    self.assertEqual(f"Echo: {message}", reply.get_text_content())
+
+        jsonrpc_10, jsonrpc_03, rest = card.supported_interfaces
+        await call(jsonrpc_10, TransportProtocol.JSONRPC, "jsonrpc-1.0")
+        await call(jsonrpc_03, TransportProtocol.JSONRPC, "jsonrpc-0.3")
+        await call(rest, TransportProtocol.HTTP_JSON, "http-json-1.0")

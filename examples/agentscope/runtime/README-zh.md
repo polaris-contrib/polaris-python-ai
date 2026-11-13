@@ -9,7 +9,7 @@
 - 借用 `SDKContext` 的生命周期
 
 ```bash
-./examples/verify.sh --only agentscope/runtime
+./integration/verify.sh --only agentscope/runtime
 
 python examples/agentscope/runtime/main.py \
   --address 127.0.0.1:8091 \

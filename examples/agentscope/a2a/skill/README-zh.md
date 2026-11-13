@@ -5,7 +5,7 @@ Polaris Skill 装入原生 `Agent` 和 `Toolkit`，通过 A2A 暴露并注册到
 Consumer 发现 AgentCard，并在同一个原生 A2A 客户端上完成多轮调用。
 
 ```bash
-../../verify.sh --only agentscope/a2a/skill
+./integration/verify.sh --only agentscope/a2a/skill
 ```
 
 手动启动 provider：

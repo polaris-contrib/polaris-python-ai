@@ -88,6 +88,11 @@ class PolarisSkillConfig:
 class PolarisA2ARegistryConfig:
     enabled: bool = True
     ttl: int = 5
+    registration_port: int = 1
+
+    def __post_init__(self):
+        if type(self.registration_port) is not int or not 1 <= self.registration_port <= 65535:
+            raise ValueError("registration_port must be an integer in 1..65535")
 
 
 @dataclass(frozen=True)
@@ -189,6 +194,11 @@ class PolarisAgentConfig:
                     env.get("POLARIS_AI_A2A_REGISTRY_ENABLED", ""), default=True
                 ),
                 ttl=_int_env(value("POLARIS_AI_A2A_TTL"), "POLARIS_AI_A2A_TTL", 5),
+                registration_port=_int_env(
+                    value("POLARIS_AI_A2A_REGISTRATION_PORT"),
+                    "POLARIS_AI_A2A_REGISTRATION_PORT",
+                    1,
+                ),
             ),
             discovery=PolarisA2ADiscoveryConfig(
                 enabled=_bool_env(

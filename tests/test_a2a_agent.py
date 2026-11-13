@@ -200,7 +200,7 @@ class PolarisA2AAgentTests(IsolatedAsyncioTestCase):
 
     async def test_successful_reply_reports_a2a_method_and_endpoint(self):
         resolver = FakeResolver(["card-1"])
-        resolver.selected_endpoint = lambda name: ("10.0.0.1", 8080)
+        resolver.selected_endpoint = lambda name: ("10.0.0.1", 1)
         reporter = FakeReporter()
         agent = PolarisA2AAgent(
             resolver,
@@ -214,6 +214,7 @@ class PolarisA2AAgentTests(IsolatedAsyncioTestCase):
         self.assertEqual("message/send", reporter.calls[0]["method"])
         self.assertEqual("a2a", reporter.calls[0]["instance_type"])
         self.assertEqual("10.0.0.1", reporter.calls[0]["host"])
+        self.assertEqual(1, reporter.calls[0]["port"])
         self.assertTrue(reporter.calls[0]["success"])
 
     async def test_cancelled_aclose_completes_client_and_resolver_cleanup(self):

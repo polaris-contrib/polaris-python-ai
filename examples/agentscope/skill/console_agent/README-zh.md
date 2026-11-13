@@ -8,6 +8,6 @@
 
 ```bash
 python examples/agentscope/skill/console_agent/main.py \
-  --address 1.14.219.4:8091 \
+  --address 127.0.0.1:8091 \
   --skill-name weather
 ```

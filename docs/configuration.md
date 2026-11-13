@@ -238,6 +238,7 @@ Skill 行为：
 | `enabled` | `True` | `POLARIS_AI_A2A_ENABLED` | A2A 注册和发现总开关 |
 | `registry.enabled` | `True` | `POLARIS_AI_A2A_REGISTRY_ENABLED` | 创建 A2A registrar |
 | `registry.ttl` | `5` | `POLARIS_AI_A2A_TTL` | 自动心跳 TTL，正整数秒 |
+| `registry.registration_port` | `1` | `POLARIS_AI_A2A_REGISTRATION_PORT` | 实例注册身份端口，范围 1..65535 |
 | `discovery.enabled` | `True` | `POLARIS_AI_A2A_DISCOVERY_ENABLED` | 创建 A2A resolver |
 
 `service_token` 用于注册、心跳和反注册。它和 connector token 独立，可以为空；服务端是否允许
@@ -245,10 +246,14 @@ Skill 行为：
 
 ### 7.2 A2A 行为
 
-- 每个 transport 注册为一个实例。
-- 实例 metadata 写入 `ai-agent-name`、`a2a.agent.card`、`a2a.transport`、`a2a.path`。
-- TLS transport 使用 `https` protocol，否则使用 `http`。
-- 部分注册失败会回滚本次已成功实例。
+- 一张实例级 AgentCard 注册为一个实例，卡片内 interface 必须属于同一 IP。
+- 实例 metadata 严格写入 `ai-agent-name`、`ai-agent-card`、`ai-a2a-version`。
+- `ai-a2a-version` 是 AgentCard schema 版本，取值为 `0.3` 或 `1.0`。
+- 实例 `protocol` 为空；transport、path、scheme 和真实端口从 AgentCard 读取。
+- 默认 `registration_port=1`，它不是 Agent 实际监听和调用端口。
+- 同 service、同 IP、同注册端口重复注册时覆盖最新 AgentCard。
+- 同 IP 并行版本必须使用不同 `registration_port`。
+- 注册失败会回滚本次唯一实例。
 - 反注册失败保留在 `registered`，可以再次关闭重试。
 - Resolver 每次查询健康实例，按 `host:port` 保持粘性。
 - 实例移除、不健康、隔离或卡片失效时切换。
@@ -519,20 +524,19 @@ runtime = PolarisAgentRuntime(
 
 | 类 | 主要参数 | 说明 |
 | --- | --- | --- |
-| `PolarisA2ARegistrar` | `namespace`、`service_token`、`ttl` | 创建、心跳、反注册 |
+| `PolarisA2ARegistrar` | `namespace`、`service_token`、`ttl`、`registration_port` | AgentCard 实例注册、心跳、反注册 |
 | `PolarisA2AResolver` | `namespace`、`timeout`（毫秒） | 发现和粘性选实例 |
 | `PolarisA2AAgent` | `agent_name`、`agent_factory`、`reporter`、`caller_service`、`labels` | 原生 A2A Agent 包装和重试 |
-| `PolarisA2AServerRegistration` | `agent_card`、`transports`、`server_ready` | 服务就绪后注册，退出时反注册 |
+| `PolarisA2AServerRegistration` | `agent_card`、`a2a_version`、`server_ready` | 服务就绪后注册，退出时反注册 |
 
-`A2ATransport`：
+`register()` / `async_register()` 接收实例级 AgentCard，并通过
+`a2a_version="0.3" | "1.0"` 指定 schema。0.3 使用顶层 `url`、
+`preferredTransport`、`protocolVersion` 和 `additionalInterfaces`；1.0 使用
+`supportedInterfaces`。
 
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `host` | 必填 | 业务实例地址，不使用 SDK bindIP |
-| `port` | 必填 | 已监听端口 |
-| `transport` | `JSONRPC` | transport 类型 |
-| `path` | `/` | A2A endpoint 绝对路径 |
-| `support_tls` | `False` | 是否注册为 HTTPS |
+`A2ATransport` 仅保留为迁移兼容类型，并在使用时发出 `DeprecationWarning`。
+兼容入口最多接受一个 transport，其 host 必须与 AgentCard IP 一致；多个 transport
+直接报错，不再产生多个实例。
 
 `server_ready` 支持 `asyncio.Event`、awaitable 或返回 awaitable 的 callable。
 
