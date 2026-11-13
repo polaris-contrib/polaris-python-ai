@@ -287,6 +287,37 @@ class RegistrarTests(TestCase):
         )
         self.assertEqual("0.3-service", request.version)
 
+    def test_legacy_03_defaults_may_be_omitted_without_rewriting_payload(self):
+        legacy = legacy_card()
+        legacy.pop("preferredTransport")
+        legacy.pop("protocolVersion")
+
+        self.registrar.register(legacy, a2a_version="0.3")
+
+        encoded = json.loads(self.engine.register_calls[0].metadata[META_AGENT_CARD])
+        self.assertNotIn("preferredTransport", encoded)
+        self.assertNotIn("protocolVersion", encoded)
+        self.assertEqual("0.3-service", self.engine.register_calls[0].version)
+
+    def test_protobuf_snake_case_aliases_are_accepted_without_rewriting_payload(self):
+        aliased = {
+            "name": "weather-agent",
+            "description": "Weather",
+            "version": "2.0",
+            "supported_interfaces": [
+                {
+                    "url": "http://10.0.0.1:8080/a2a",
+                    "protocol_binding": "JSONRPC",
+                    "protocol_version": "1.0",
+                }
+            ],
+        }
+
+        self.registrar.register(aliased)
+
+        encoded = json.loads(self.engine.register_calls[0].metadata[META_AGENT_CARD])
+        self.assertEqual(aliased, encoded)
+
     def test_legacy_03_card_with_multiple_ip_addresses_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "same IP"):
             self.registrar.register(
@@ -517,6 +548,37 @@ class ResolverTests(TestCase):
         resolved = self.resolver.resolve("weather-agent")
         self.assertEqual("java", resolved.version)
         self.assertEqual("http://10.0.0.1:8080/", resolved.supported_interfaces[0].url)
+
+    def test_legacy_defaults_and_protobuf_aliases_are_resolved(self):
+        legacy = legacy_card(version="legacy")
+        legacy.pop("preferredTransport")
+        legacy.pop("protocolVersion")
+        self.first.instance.version.value = "legacy"
+        self.first.instance.metadata[META_AGENT_CARD] = json.dumps(legacy)
+        self.first.instance.metadata[META_A2A_VERSION] = "0.3"
+
+        resolved = self.resolver.resolve("weather-agent")
+        self.assertEqual("JSONRPC", resolved.supported_interfaces[0].protocol_binding)
+        self.assertEqual("0.3.0", resolved.supported_interfaces[0].protocol_version)
+
+        aliased = {
+            "name": "weather-agent",
+            "description": "Weather",
+            "version": "1.0",
+            "supported_interfaces": [
+                {
+                    "url": "http://10.0.0.1:8080/a2a",
+                    "protocol_binding": "JSONRPC",
+                    "protocol_version": "1.0",
+                }
+            ],
+        }
+        self.engine.snapshot = snapshot([
+            instance("10.0.0.1", json.dumps(aliased), version="1.0"),
+        ])
+        resolved = self.resolver.resolve("weather-agent")
+        self.assertEqual("JSONRPC", resolved.supported_interfaces[0].protocol_binding)
+        self.assertEqual("1.0", resolved.supported_interfaces[0].protocol_version)
 
     def test_bad_schema_host_version_name_and_metadata_are_skipped(self):
         bad = []

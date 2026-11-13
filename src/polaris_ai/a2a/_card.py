@@ -38,6 +38,7 @@ MAX_METADATA_VALUE_CHARS = 65535
 A2A_VERSION_03 = "0.3"
 A2A_VERSION_10 = "1.0"
 SUPPORTED_A2A_VERSIONS = (A2A_VERSION_03, A2A_VERSION_10)
+_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,17 @@ def _reject_duplicate_legacy_aliases(payload: dict[str, Any]) -> None:
             )
 
 
+def _aliased_value(
+    payload: Mapping[str, Any],
+    *names: str,
+    default: Any = _MISSING,
+) -> Any:
+    for name in names:
+        if name in payload:
+            return payload[name]
+    return default
+
+
 def _validate_schema_shape(
     payload: dict[str, Any],
     a2a_version: str,
@@ -180,19 +192,31 @@ def _validate_schema_shape(
             for key in ("supportedInterfaces", "supported_interfaces")
         ):
             raise ValueError("AgentCard 0.3 must not use supportedInterfaces")
-        if (
-            not isinstance(payload.get("preferredTransport"), str)
-            or not payload["preferredTransport"].strip()
+        preferred_transport = _aliased_value(
+            payload,
+            "preferredTransport",
+            "preferred_transport",
+        )
+        if preferred_transport is not _MISSING and (
+            not isinstance(preferred_transport, str) or not preferred_transport.strip()
         ):
-            raise ValueError("AgentCard 0.3 requires a non-empty preferredTransport")
-        if (
-            not isinstance(payload.get("protocolVersion"), str)
-            or not payload["protocolVersion"].strip()
-        ):
-            raise ValueError("AgentCard 0.3 requires a non-empty protocolVersion")
-        if normalize_a2a_version(payload["protocolVersion"]) != A2A_VERSION_03:
-            raise ValueError("AgentCard 0.3 protocolVersion must resolve to 0.3")
-        additional = payload.get("additionalInterfaces", [])
+            raise ValueError("AgentCard 0.3 preferredTransport must be a non-empty string")
+        protocol_version = _aliased_value(
+            payload,
+            "protocolVersion",
+            "protocol_version",
+        )
+        if protocol_version is not _MISSING:
+            if not isinstance(protocol_version, str) or not protocol_version.strip():
+                raise ValueError("AgentCard 0.3 protocolVersion must be a non-empty string")
+            if normalize_a2a_version(protocol_version) != A2A_VERSION_03:
+                raise ValueError("AgentCard 0.3 protocolVersion must resolve to 0.3")
+        additional = _aliased_value(
+            payload,
+            "additionalInterfaces",
+            "additional_interfaces",
+            default=[],
+        )
         if not isinstance(additional, list):
             raise ValueError("AgentCard 0.3 additionalInterfaces must be a list")
         if any(
@@ -219,18 +243,23 @@ def _validate_schema_shape(
         )
     ):
         raise ValueError("AgentCard 1.0 must not use legacy connection fields")
-    interfaces = payload.get("supportedInterfaces")
+    interfaces = _aliased_value(payload, "supportedInterfaces", "supported_interfaces")
     if not isinstance(interfaces, list) or not interfaces:
         raise ValueError("AgentCard 1.0 requires non-empty supportedInterfaces")
-    if any(
-        not isinstance(item, Mapping)
-        or not isinstance(item.get("url"), str)
-        or not item["url"].strip()
-        or not isinstance(item.get("protocolBinding"), str)
-        or not item["protocolBinding"].strip()
-        for item in interfaces
-    ):
-        raise ValueError("AgentCard 1.0 supportedInterfaces entries are invalid")
+    for item in interfaces:
+        protocol_binding = (
+            _aliased_value(item, "protocolBinding", "protocol_binding")
+            if isinstance(item, Mapping)
+            else _MISSING
+        )
+        if (
+            not isinstance(item, Mapping)
+            or not isinstance(item.get("url"), str)
+            or not item["url"].strip()
+            or not isinstance(protocol_binding, str)
+            or not protocol_binding.strip()
+        ):
+            raise ValueError("AgentCard 1.0 supportedInterfaces entries are invalid")
 
 
 def prepare_agent_card(
